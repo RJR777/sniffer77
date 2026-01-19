@@ -1,0 +1,70 @@
+2026-01-19 11:43:10,411 - network_monitor - INFO - 📋 Configuration:
+2026-01-19 11:43:10,411 - network_monitor - INFO -    Ethernet: enp2s0
+2026-01-19 11:43:10,411 - network_monitor - INFO -    WiFi: wlp3s0
+2026-01-19 11:43:10,411 - network_monitor - INFO - 🔍 Starting device discovery...
+2026-01-19 11:43:10,412 - device_discovery - WARNING - Could not get network for enp2s0: name 'get_if_addr' is not defined
+2026-01-19 11:43:10,412 - device_discovery - INFO - Background device scanning started
+2026-01-19 11:43:10,412 - device_discovery - WARNING - Could not get network for wlp3s0: name 'get_if_addr' is not defined
+2026-01-19 11:43:10,412 - network_monitor - INFO - 📡 Performing initial network scan...
+2026-01-19 11:43:10,412 - device_discovery - WARNING - Could not get network for enp2s0: name 'get_if_addr' is not defined
+2026-01-19 11:43:10,412 - device_discovery - WARNING - Could not get network for wlp3s0: name 'get_if_addr' is not defined
+2026-01-19 11:43:10,412 - network_monitor - INFO -    Found 0 devices on initial scan
+2026-01-19 11:43:10,412 - network_monitor - INFO - 📡 Starting packet sniffer...
+2026-01-19 11:43:10,412 - packet_sniffer - ERROR - Cannot start sniffer - scapy not available
+2026-01-19 11:43:10,412 - network_monitor - INFO - 🌐 Starting dashboard at http://0.0.0.0:5000
+2026-01-19 11:43:30,472 - network_monitor - INFO - 📋 Configuration:
+2026-01-19 11:43:30,472 - network_monitor - INFO -    Ethernet: enp2s0
+2026-01-19 11:43:30,472 - network_monitor - INFO -    WiFi: wlp3s0
+2026-01-19 11:43:30,472 - network_monitor - INFO - 🔍 Starting device discovery...
+2026-01-19 11:43:30,473 - device_discovery - WARNING - Could not get network for enp2s0: name 'get_if_addr' is not defined
+2026-01-19 11:43:30,473 - device_discovery - INFO - Background device scanning started
+2026-01-19 11:43:30,473 - device_discovery - WARNING - Could not get network for wlp3s0: name 'get_if_addr' is not defined
+2026-01-19 11:43:30,473 - network_monitor - INFO - 📡 Performing initial network scan...
+2026-01-19 11:43:30,473 - device_discovery - WARNING - Could not get network for enp2s0: name 'get_if_addr' is not defined
+2026-01-19 11:43:30,473 - device_discovery - WARNING - Could not get network for wlp3s0: name 'get_if_addr' is not defined
+2026-01-19 11:43:30,473 - network_monitor - INFO -    Found 0 devices on initial scan
+2026-01-19 11:43:30,473 - network_monitor - INFO - 📡 Starting packet sniffer...
+2026-01-19 11:43:30,473 - packet_sniffer - ERROR - Cannot start sniffer - scapy not available
+2026-01-19 11:43:30,473 - network_monitor - INFO - 🌐 Starting dashboard at http://0.0.0.0:5000
+2026-01-19 13:34:38,573 - network_monitor - INFO - 📋 Configuration:
+2026-01-19 13:34:38,573 - network_monitor - INFO -    Ethernet: enp2s0
+2026-01-19 13:34:38,574 - network_monitor - INFO -    WiFi: wlp3s0
+2026-01-19 13:34:38,574 - network_monitor - INFO - 🔍 Starting device discovery...
+2026-01-19 13:34:38,574 - device_discovery - WARNING - Could not get network for enp2s0: name 'get_if_addr' is not defined
+2026-01-19 13:34:38,574 - device_discovery - INFO - Background device scanning started
+2026-01-19 13:34:38,574 - device_discovery - WARNING - Could not get network for wlp3s0: name 'get_if_addr' is not defined
+2026-01-19 13:34:38,574 - network_monitor - INFO - 📡 Performing initial network scan...
+2026-01-19 13:34:38,574 - device_discovery - WARNING - Could not get network for enp2s0: name 'get_if_addr' is not defined
+2026-01-19 13:34:38,574 - device_discovery - WARNING - Could not get network for wlp3s0: name 'get_if_addr' is not defined
+2026-01-19 13:34:38,575 - network_monitor - INFO -    Found 0 devices on initial scan
+2026-01-19 13:34:38,575 - network_monitor - INFO - 📡 Starting packet sniffer...
+2026-01-19 13:34:38,575 - packet_sniffer - ERROR - Cannot start sniffer - scapy not available
+2026-01-19 13:34:38,575 - network_monitor - INFO - 🌐 Starting dashboard at http://0.0.0.0:5000
+2026-01-19 13:52:27,904 - network_monitor - INFO - 📋 Configuration:
+2026-01-19 13:52:27,904 - network_monitor - INFO -    Ethernet: enp2s0
+2026-01-19 13:52:27,905 - network_monitor - INFO -    WiFi: wlp3s0
+2026-01-19 13:52:27,905 - network_monitor - INFO - 🔍 Starting device discovery...
+2026-01-19 13:52:27,905 - network_monitor - WARNING - Could not get network for enp2s0: name 'get_if_addr' is not defined
+2026-01-19 13:52:27,905 - network_monitor - INFO - Background device scanning started
+2026-01-19 13:52:27,905 - network_monitor - WARNING - Could not get network for wlp3s0: name 'get_if_addr' is not defined
+2026-01-19 13:52:27,905 - network_monitor - INFO - 📡 Performing initial network scan...
+2026-01-19 13:52:27,905 - network_monitor - WARNING - Could not get network for enp2s0: name 'get_if_addr' is not defined
+2026-01-19 13:52:27,905 - network_monitor - WARNING - Could not get network for wlp3s0: name 'get_if_addr' is not defined
+2026-01-19 13:52:27,905 - network_monitor - INFO -    Found 0 devices on initial scan
+2026-01-19 13:52:27,905 - network_monitor - INFO - 📡 Starting packet sniffer...
+2026-01-19 13:52:27,905 - network_monitor - ERROR - Cannot start sniffer - scapy not available
+2026-01-19 13:52:27,906 - network_monitor - INFO - 🌐 Starting dashboard at http://0.0.0.0:5000
+2026-01-19 13:53:03,680 - network_monitor - INFO - 📋 Configuration:
+2026-01-19 13:53:03,680 - network_monitor - INFO -    Ethernet: enp2s0
+2026-01-19 13:53:03,680 - network_monitor - INFO -    WiFi: wlp3s0
+2026-01-19 13:53:03,680 - network_monitor - INFO - 🔍 Starting device discovery...
+2026-01-19 13:53:03,680 - network_monitor - WARNING - Could not get network for enp2s0: name 'get_if_addr' is not defined
+2026-01-19 13:53:03,680 - network_monitor - INFO - Background device scanning started
+2026-01-19 13:53:03,681 - network_monitor - WARNING - Could not get network for wlp3s0: name 'get_if_addr' is not defined
+2026-01-19 13:53:03,681 - network_monitor - INFO - 📡 Performing initial network scan...
+2026-01-19 13:53:03,681 - network_monitor - WARNING - Could not get network for enp2s0: name 'get_if_addr' is not defined
+2026-01-19 13:53:03,681 - network_monitor - WARNING - Could not get network for wlp3s0: name 'get_if_addr' is not defined
+2026-01-19 13:53:03,681 - network_monitor - INFO -    Found 0 devices on initial scan
+2026-01-19 13:53:03,681 - network_monitor - INFO - 📡 Starting packet sniffer...
+2026-01-19 13:53:03,681 - network_monitor - ERROR - Cannot start sniffer - scapy not available
+2026-01-19 13:53:03,681 - network_monitor - INFO - 🌐 Starting dashboard at http://0.0.0.0:5000

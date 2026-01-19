@@ -1,0 +1,418 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Network Monitor - Dashboard</title>
+    <meta name="description" content="Real-time network monitoring dashboard for LAN and WiFi devices">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet">
+    <link rel="stylesheet" href="/static/styles.css">
+    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
+</head>
+
+<body>
+    <div class="bg-pattern"></div>
+
+    <header class="header">
+        <div class="header-content">
+            <div class="logo">
+                <div class="logo-icon">🌐</div>
+                <span class="logo-text">Network Monitor</span>
+            </div>
+            <div class="status-indicator">
+                <span class="status-dot" id="connectionStatus"></span>
+                <span id="statusText">Connecting...</span>
+            </div>
+        </div>
+    </header>
+
+    <main class="main-container">
+        <!-- Stats Overview -->
+        <section class="stats-grid" id="statsGrid">
+            <div class="stat-card">
+                <div class="stat-icon devices">📱</div>
+                <div class="stat-label">Active Devices</div>
+                <div class="stat-value" id="activeDevices">--</div>
+                <div class="stat-change" id="totalDevices">/ -- total</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon upload">↑</div>
+                <div class="stat-label">Upload (1h)</div>
+                <div class="stat-value" id="bytesSent">--</div>
+                <div class="stat-change">Last hour</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon download">↓</div>
+                <div class="stat-label">Download (1h)</div>
+                <div class="stat-value" id="bytesReceived">--</div>
+                <div class="stat-change">Last hour</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-icon bandwidth">📊</div>
+                <div class="stat-label">Total Bandwidth</div>
+                <div class="stat-value" id="totalBandwidth">--</div>
+                <div class="stat-change" id="lastUpdate">--</div>
+            </div>
+        </section>
+
+        <!-- Devices Section -->
+        <section class="section-header">
+            <h2 class="section-title">
+                <span class="section-title-icon">🖥️</span>
+                Network Devices
+            </h2>
+        </section>
+
+        <div class="devices-grid" id="devicesGrid">
+            <div class="loading">
+                <div class="loading-dot"></div>
+                <div class="loading-dot"></div>
+                <div class="loading-dot"></div>
+            </div>
+        </div>
+
+        <!-- Top Talkers Section -->
+        <section class="activity-section">
+            <div class="activity-header">
+                <h2 class="section-title">
+                    <span class="section-title-icon">📈</span>
+                    Top Bandwidth Consumers
+                </h2>
+            </div>
+            <table class="activity-table" id="topTalkersTable">
+                <thead>
+                    <tr>
+                        <th>Device</th>
+                        <th>MAC Address</th>
+                        <th>IP Address</th>
+                        <th>Manufacturer</th>
+                        <th>Upload</th>
+                        <th>Download</th>
+                        <th>Total</th>
+                    </tr>
+                </thead>
+                <tbody id="topTalkersBody">
+                    <tr>
+                        <td colspan="7" class="loading">
+                            <div class="loading-dot"></div>
+                            <div class="loading-dot"></div>
+                            <div class="loading-dot"></div>
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+
+        <!-- Live Activity Section -->
+        <section class="activity-section">
+            <div class="activity-header">
+                <h2 class="section-title">
+                    <span class="section-title-icon">⚡</span>
+                    Live Traffic
+                </h2>
+            </div>
+            <table class="activity-table">
+                <thead>
+                    <tr>
+                        <th>Device</th>
+                        <th>MAC Address</th>
+                        <th>Manufacturer</th>
+                        <th>Packets ↑</th>
+                        <th>Packets ↓</th>
+                        <th>Bytes ↑</th>
+                        <th>Bytes ↓</th>
+                        <th>Protocols</th>
+                    </tr>
+                </thead>
+                <tbody id="liveStatsBody">
+                    <tr>
+                        <td colspan="8" class="empty-state">Waiting for traffic data...</td>
+                    </tr>
+                </tbody>
+            </table>
+        </section>
+    </main>
+
+    <script>
+        // Socket.IO connection
+        const socket = io();
+        let isConnected = false;
+        // Track monitoring state locally
+        const monitoringState = {};
+
+        function setButtonActive(btn) {
+            btn.textContent = 'Stop Monitoring';
+            btn.style.background = '#ef4444'; // Red
+            btn.style.color = 'white';
+        }
+
+        function setButtonInactive(btn) {
+            btn.textContent = 'Start Monitoring';
+            btn.style.background = '#10b981'; // Green
+            btn.style.color = 'white';
+        }
+
+        async function toggleMonitoring(mac, btn) {
+            const isMonitoring = monitoringState[mac];
+            const action = isMonitoring ? 'stop' : 'start';
+
+            // Optimistic update
+            btn.disabled = true;
+            btn.textContent = 'Updating...';
+
+            try {
+                const res = await fetch(`/api/device/${mac}/monitor`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: action })
+                });
+                const data = await res.json();
+
+                if (data.success) {
+                    monitoringState[mac] = (action === 'start');
+                    if (action === 'start') {
+                        setButtonActive(btn);
+                    } else {
+                        setButtonInactive(btn);
+                    }
+                } else {
+                    alert('Error: ' + data.error);
+                    // Revert state on error
+                    if (isMonitoring) setButtonActive(btn);
+                    else setButtonInactive(btn);
+                }
+            } catch (e) {
+                console.error(e);
+                alert('Network error');
+            } finally {
+                btn.disabled = false;
+            }
+        }
+
+        // Format bytes to human readable
+        function formatBytes(bytes) {
+            if (bytes === 0 || bytes === undefined || bytes === null) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB', 'TB'];
+            const i = Math.floor(Math.log(Math.abs(bytes)) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        // Format time
+        function formatTime(isoString) {
+            const date = new Date(isoString);
+            return date.toLocaleTimeString();
+        }
+
+        // Update connection status
+        function updateConnectionStatus(connected) {
+            const dot = document.getElementById('connectionStatus');
+            const text = document.getElementById('statusText');
+            isConnected = connected;
+
+            if (connected) {
+                dot.style.background = '#10b981';
+                text.textContent = 'Live';
+            } else {
+                dot.style.background = '#ef4444';
+                text.textContent = 'Disconnected';
+            }
+        }
+
+        // Update summary stats
+        function updateSummary(summary) {
+            document.getElementById('activeDevices').textContent = summary.active_devices || 0;
+            document.getElementById('totalDevices').textContent = `/ ${summary.total_devices || 0} total`;
+            document.getElementById('bytesSent').textContent = formatBytes(summary.bytes_sent_hour);
+            document.getElementById('bytesReceived').textContent = formatBytes(summary.bytes_received_hour);
+
+            const total = (summary.bytes_sent_hour || 0) + (summary.bytes_received_hour || 0);
+            document.getElementById('totalBandwidth').textContent = formatBytes(total);
+            document.getElementById('lastUpdate').textContent = `Updated: ${formatTime(summary.timestamp)}`;
+        }
+
+        // Update devices grid
+        function updateDevices(devices) {
+            const grid = document.getElementById('devicesGrid');
+
+            if (!devices || devices.length === 0) {
+                grid.innerHTML = '<div class="empty-state"><div class="empty-state-icon">📡</div><p>No devices discovered yet. Make sure the sniffer is running.</p></div>';
+                return;
+            }
+
+            grid.innerHTML = devices.map(device => `
+                <div class="device-card ${device.is_active ? 'active' : ''}">
+                    <div class="device-header">
+                        <div class="device-info">
+                            <div class="device-name">
+                                ${device.custom_name || device.hostname || 'Unknown Device'}
+                            </div>
+                            <div class="device-manufacturer">${device.manufacturer || 'Unknown Manufacturer'}</div>
+                        </div>
+                        <div class="device-status ${device.is_active ? '' : 'inactive'}"></div>
+                    </div>
+                    <div class="device-details">
+                        <div class="device-detail">
+                            <span class="device-detail-label">IP Address</span>
+                            <span class="device-detail-value">${device.ip || 'N/A'}</span>
+                        </div>
+                        <div class="device-detail">
+                            <span class="device-detail-label">MAC Address</span>
+                            <span class="device-detail-value">${device.mac}</span>
+                        </div>
+                        <div class="device-detail">
+                            <span class="device-detail-label">First Seen</span>
+                            <span class="device-detail-value">${device.first_seen ? formatTime(device.first_seen) : 'N/A'}</span>
+                        </div>
+                        <div class="device-detail">
+                            <span class="device-detail-label">Last Seen</span>
+                            <span class="device-detail-value">${device.last_seen ? formatTime(device.last_seen) : 'N/A'}</span>
+                        </div>
+                        <div class="device-actions" style="margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
+                            <button class="monitor-btn" 
+                                onclick="toggleMonitoring('${device.mac}', this)" 
+                                data-mac="${device.mac}"
+                                style="width: 100%; padding: 6px; border-radius: 4px; border: none; font-weight: 500; cursor: pointer; transition: all 0.2s;"
+                                >
+                                Start Monitoring
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            `).join('');
+
+            // Restore button states
+            document.querySelectorAll('.monitor-btn').forEach(btn => {
+                const mac = btn.getAttribute('data-mac');
+                if (monitoringState[mac]) {
+                    setButtonActive(btn);
+                } else {
+                    setButtonInactive(btn);
+                }
+            });
+        }
+
+        // Update top talkers table
+        function updateTopTalkers(talkers) {
+            const tbody = document.getElementById('topTalkersBody');
+
+            if (!talkers || talkers.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No traffic data yet</td></tr>';
+                return;
+            }
+
+            tbody.innerHTML = talkers.map(t => `
+                <tr>
+                    <td><strong>${t.custom_name || t.hostname || 'Unknown'}</strong></td>
+                    <td><span class="mac-address">${t.mac}</span></td>
+                    <td><span class="ip-address">${t.ip || 'N/A'}</span></td>
+                    <td>${t.manufacturer || 'Unknown'}</td>
+                    <td class="traffic-item up">↑ ${formatBytes(t.bytes_sent)}</td>
+                    <td class="traffic-item down">↓ ${formatBytes(t.bytes_received)}</td>
+                    <td><span class="badge badge-info">${formatBytes(t.total_bytes)}</span></td>
+                </tr>
+            `).join('');
+        }
+
+        // Update live stats table
+        function updateLiveStats(stats) {
+            const tbody = document.getElementById('liveStatsBody');
+
+            if (!stats || Object.keys(stats).length === 0) {
+                tbody.innerHTML = '<tr><td colspan="8" class="empty-state">Waiting for traffic data...</td></tr>';
+                return;
+            }
+
+            const sorted = Object.values(stats).sort((a, b) =>
+                (b.bytes_sent + b.bytes_received) - (a.bytes_sent + a.bytes_received)
+            ).slice(0, 20);
+
+            tbody.innerHTML = sorted.map(s => {
+                const protocols = Object.keys(s.protocols || {}).slice(0, 3);
+                return `
+                    <tr>
+                        <td><strong>${s.hostname || 'Unknown'}</strong></td>
+                        <td><span class="mac-address">${s.mac}</span></td>
+                        <td>${s.manufacturer || 'Unknown'}</td>
+                        <td>${s.packets_sent.toLocaleString()}</td>
+                        <td>${s.packets_received.toLocaleString()}</td>
+                        <td class="traffic-item up">↑ ${formatBytes(s.bytes_sent)}</td>
+                        <td class="traffic-item down">↓ ${formatBytes(s.bytes_received)}</td>
+                        <td>
+                            <div class="protocol-pills">
+                                ${protocols.map(p => `<span class="protocol-pill">${p}</span>`).join('')}
+                            </div>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+        }
+
+        // Socket.IO event handlers
+        socket.on('connect', () => {
+            console.log('Connected to server');
+            updateConnectionStatus(true);
+            socket.emit('request_update');
+        });
+
+        socket.on('disconnect', () => {
+            console.log('Disconnected from server');
+            updateConnectionStatus(false);
+        });
+
+        socket.on('connected', (data) => {
+            console.log('Server acknowledged connection:', data);
+        });
+
+        socket.on('stats_update', (data) => {
+            console.log('Received stats update');
+            if (data.summary) updateSummary(data.summary);
+            if (data.top_talkers) updateTopTalkers(data.top_talkers);
+            if (data.live_stats) updateLiveStats(data.live_stats);
+        });
+
+        // Initial data fetch via REST API
+        async function fetchInitialData() {
+            try {
+                // Fetch summary
+                const summaryRes = await fetch('/api/summary');
+                const summary = await summaryRes.json();
+                updateSummary(summary);
+
+                // Fetch devices
+                const devicesRes = await fetch('/api/devices');
+                const devices = await devicesRes.json();
+                updateDevices(devices);
+
+                // Fetch top talkers
+                const talkersRes = await fetch('/api/top-talkers');
+                const talkers = await talkersRes.json();
+                updateTopTalkers(talkers);
+
+            } catch (error) {
+                console.error('Error fetching initial data:', error);
+            }
+        }
+
+        // Periodic refresh for devices (in case WebSocket misses updates)
+        setInterval(async () => {
+            try {
+                const devicesRes = await fetch('/api/devices');
+                const devices = await devicesRes.json();
+                updateDevices(devices);
+            } catch (e) {
+                console.warn('Failed to refresh devices');
+            }
+        }, 15000);
+
+        // Initialize
+        fetchInitialData();
+    </script>
+</body>
+
+</html>
