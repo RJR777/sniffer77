@@ -626,21 +626,83 @@ class OUIDatabase:
     
     def __init__(self):
         self._vendor_lookup = None
+        self._local_db: Dict[str, str] = self.COMMON_OUIS.copy()
         self._init_vendor_lookup()
-    
+        self._load_cached_oui()
+        
     def _init_vendor_lookup(self):
         """Initialize the mac-vendor-lookup library"""
         try:
             from mac_vendor_lookup import MacLookup
             self._vendor_lookup = MacLookup()
-            # Update the database on first run (cached locally)
-            try:
-                self._vendor_lookup.update_vendors()
-            except Exception as e:
-                logger.warning(f"Could not update OUI database: {e}")
+            # Try to update, but don't block if it fails
+            threading.Thread(target=self._async_update, daemon=True).start()
         except ImportError:
             logger.warning("mac-vendor-lookup not installed, using built-in OUI database")
-    
+            
+    def _async_update(self):
+        """Update vendors in the background"""
+        try:
+            self._vendor_lookup.update_vendors()
+            logger.info("OUI vendor database updated successfully")
+        except Exception as e:
+            logger.debug(f"Background OUI update skipped: {e}")
+            # Try to download wireshark manuf file as fallback
+            self.download_wireshark_manuf()
+
+    def download_wireshark_manuf(self):
+        """Download Wireshark's manuf file as a comprehensive fallback"""
+        url = "https://code.wireshark.org/review/gitweb?p=wireshark.git;a=blob_plain;f=manuf;hb=HEAD"
+        # Since we might not have 'requests' installed, try using urllib
+        import urllib.request
+        try:
+            logger.info("Downloading Wireshark manuf file for enhanced OUI lookup...")
+            response = urllib.request.urlopen(url, timeout=10)
+            content = response.read().decode('utf-8', errors='ignore')
+            
+            count = 0
+            for line in content.splitlines():
+                if line.startswith('#') or not line.strip():
+                    continue
+                parts = line.split('\t')
+                if len(parts) >= 2:
+                    oui = parts[0].strip().upper()
+                    # Convert AA:BB:CC/24 or AA:BB:CC formats
+                    if '/' in oui:
+                        oui = oui.split('/')[0]
+                    
+                    if len(oui) == 8: # XX:XX:XX
+                        vendor = parts[1].strip()
+                        self._local_db[oui] = vendor
+                        count += 1
+            
+            logger.info(f"Loaded {count} additional vendors from Wireshark database")
+            self._save_cached_oui()
+        except Exception as e:
+            logger.warning(f"Could not download Wireshark OUI data: {e}")
+
+    def _save_cached_oui(self):
+        """Save the combined OUI database to a local cache file"""
+        try:
+            with open(OUI_CACHE_FILE, 'w') as f:
+                for oui, vendor in self._local_db.items():
+                    f.write(f"{oui}\t{vendor}\n")
+        except Exception as e:
+            logger.debug(f"Could not save OUI cache: {e}")
+
+    def _load_cached_oui(self):
+        """Load OUI from local cache file"""
+        if os.path.exists(OUI_CACHE_FILE):
+            try:
+                with open(OUI_CACHE_FILE, 'r') as f:
+                    for line in f:
+                        parts = line.strip().split('\t')
+                        if len(parts) == 2:
+                            self._local_db[parts[0]] = parts[1]
+                logger.info(f"Loaded {len(self._local_db)} OUI entries from cache")
+            except Exception as e:
+                logger.debug(f"Could not load OUI cache: {e}")
+
     @staticmethod
     def normalize_mac(mac: str) -> str:
         """Normalize MAC address to XX:XX:XX:XX:XX:XX format"""
@@ -661,7 +723,6 @@ class OUIDatabase:
     def lookup(self, mac: str) -> Optional[str]:
         """
         Look up manufacturer from MAC address.
-        Returns manufacturer name or None if not found.
         """
         normalized = self.normalize_mac(mac)
         oui = self.get_oui(normalized)
@@ -673,14 +734,14 @@ class OUIDatabase:
             except Exception:
                 pass
         
-        # Fall back to local database
-        if oui in self.COMMON_OUIS:
-            return self.COMMON_OUIS[oui]
+        # Fall back to combined local/cached database
+        if oui in self._local_db:
+            return self._local_db[oui]
         
         # Check partial matches for docker (first 2 bytes)
         partial = normalized[:5]
-        if partial in self.COMMON_OUIS:
-            return self.COMMON_OUIS[partial]
+        if partial in self._local_db:
+            return self._local_db[partial]
         
         return None
     

@@ -22,9 +22,24 @@ from functools import lru_cache
 try:
     from scapy.all import sniff, IP, TCP, UDP, ICMP, ARP, Ether, DNS, conf, srp, get_if_addr, get_if_hwaddr
     SCAPY_AVAILABLE = True
-except ImportError:
+except Exception as e:
+    # We will log the error after the logger is initialized
+    _SCAPY_ERROR = e
     SCAPY_AVAILABLE = False
-
+    # Define dummies to avoid NameError
+    def sniff(*args, **kwargs): pass
+    def get_if_addr(iface): return '0.0.0.0'
+    def get_if_hwaddr(iface): return '00:00:00:00:00:00'
+    class conf: verb = 0
+    class IP: pass
+    class TCP: pass
+    class UDP: pass
+    class ICMP: pass
+    class ARP: pass
+    class Ether: pass
+    class DNS: pass
+    def srp(*args, **kwargs): return ([], [])
+    
 # Import OUI database wrapper
 try:
     from oui_database import OUIDatabase, get_device_info, lookup_manufacturer
@@ -36,8 +51,21 @@ except ImportError:
     def get_device_info(mac): return {'manufacturer': 'Unknown', 'is_virtual': False}
     def lookup_manufacturer(mac): return 'Unknown'
 
+# Import device fingerprinter
+try:
+    from device_fingerprint import fingerprinter, DeviceFingerprinter
+    FINGERPRINTING_AVAILABLE = True
+except ImportError:
+    FINGERPRINTING_AVAILABLE = False
+    fingerprinter = None
+
 
 logger = logging.getLogger('network_monitor')
+
+# Log scapy error if it failed to import
+if not SCAPY_AVAILABLE and '_SCAPY_ERROR' in globals():
+    logger.error(f"Scapy import failed: {_SCAPY_ERROR}")
+    logger.error("Sniffing and active scans will be disabled.")
 
 # ==========================================
 # CONFIGURATION
@@ -523,6 +551,15 @@ class PacketSniffer:
                     service = self._get_service(min(src_port, dst_port))
                     if packet.haslayer(DNS):
                         service = 'DNS'
+                    # Process DHCP for fingerprinting
+                    if (src_port in (67, 68) or dst_port in (67, 68)) and FINGERPRINTING_AVAILABLE:
+                        logger.info(f"💾 DHCP packet detected from {src_ip}:{src_port} to {dst_ip}:{dst_port}")
+                        try:
+                            res = fingerprinter.process_dhcp(packet)
+                            if res:
+                                logger.info(f"✅ DHCP Fingerprint: {res.get('mac')} -> {res.get('os_guess')} (Lease: {res.get('lease_time')}s)")
+                        except Exception as e:
+                            logger.error(f"DHCP fingerprint error: {e}")
                 elif packet.haslayer(ICMP):
                     protocol = 'ICMP'
                     service = 'ICMP'
@@ -548,6 +585,10 @@ class PacketSniffer:
                     
                     # Notify device discovery
                     discovery.process_packet_device(src_mac, src_ip)
+                    
+                    # Register with fingerprinter for IP-MAC mapping
+                    if FINGERPRINTING_AVAILABLE and src_ip:
+                        fingerprinter.register_ip_mac(src_ip, src_mac)
                 
                 # Track destination device (if not broadcast)
                 if dst_mac and not is_broadcast and dst_mac not in self._local_macs:
@@ -770,6 +811,30 @@ class ArpSpoofer:
         except Exception:
             pass
 
-# Initialize singleton
+# Initialize singletons
 sniffer = PacketSniffer()
 arp_spoofer = ArpSpoofer()
+
+# Start fingerprinting if available
+if FINGERPRINTING_AVAILABLE:
+    def _on_fingerprint_update(mac: str, info: dict):
+        """Callback when fingerprinter updates device info"""
+        device_type = info.get('device_type') or info.get('os_type')
+        hostname = info.get('hostname')
+        if device_type or hostname:
+            db.upsert_device(
+                mac=mac,
+                ip=info.get('ip'),
+                hostname=hostname,
+                device_type=device_type,
+                metadata={
+                    'services': info.get('services', []),
+                    'discovery_methods': info.get('discovery_methods', []),
+                    'dhcp_lease_time': info.get('dhcp_lease_time'),
+                }
+            )
+            logger.info(f"Fingerprint update: {mac} -> {device_type or 'Unknown'} ({hostname or 'no hostname'})")
+    
+    fingerprinter.device_callback = _on_fingerprint_update
+    fingerprinter.start()
+    logger.info("Device fingerprinting enabled (mDNS, SSDP, DHCP)")

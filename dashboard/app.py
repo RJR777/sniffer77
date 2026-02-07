@@ -1,9 +1,15 @@
-"""
-Flask web dashboard for network monitoring
-"""
 import os
 import sys
+
+# Apply eventlet monkey patch before other imports
+try:
+    import eventlet
+    eventlet.monkey_patch()
+except ImportError:
+    pass
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 
 from flask import Flask, render_template, jsonify, request
 from flask_socketio import SocketIO, emit
@@ -17,7 +23,10 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = SECRET_KEY
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading')
+
+# Use eventlet or gevent if available for better websocket performance
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+
 
 
 def format_bytes(num_bytes: int) -> str:
@@ -32,12 +41,15 @@ def format_bytes(num_bytes: int) -> str:
 @app.route('/')
 def index():
     """Main dashboard page"""
+    logger.info(f"🌐 Dashboard requested from {request.remote_addr}")
     return render_template('index.html')
+
 
 
 @app.route('/api/summary')
 def api_summary():
     """Get dashboard summary"""
+    logger.debug(f"📊 Summary requested from {request.remote_addr}")
     summary = db.get_dashboard_summary()
     summary['bytes_sent_formatted'] = format_bytes(summary['bytes_sent_hour'])
     summary['bytes_received_formatted'] = format_bytes(summary['bytes_received_hour'])
@@ -47,9 +59,23 @@ def api_summary():
 @app.route('/api/devices')
 def api_devices():
     """Get all active devices"""
+    import json
     devices = db.get_all_devices(active_only=True)
     for d in devices:
         d['bytes_display'] = format_bytes(0)  # Will be updated via live stats
+        # Parse metadata for fingerprint info
+        if d.get('metadata'):
+            try:
+                meta = json.loads(d['metadata']) if isinstance(d['metadata'], str) else d['metadata']
+                d['services'] = meta.get('services', [])
+                d['discovery_methods'] = meta.get('discovery_methods', [])
+                d['dhcp_lease_time'] = meta.get('dhcp_lease_time')
+                if d['dhcp_lease_time']:
+                    # Format lease time as human readable
+                    hours = d['dhcp_lease_time'] // 3600
+                    d['dhcp_lease_display'] = f"{hours}h" if hours else f"{d['dhcp_lease_time'] // 60}m"
+            except:
+                pass
     return jsonify(devices)
 
 
@@ -101,6 +127,47 @@ def set_device_name(mac):
     return jsonify({'success': True, 'mac': mac, 'name': name})
 
 
+@app.route('/api/shutdown', methods=['POST'])
+def api_shutdown():
+    """Shutdown the entire application"""
+    logger.info("🛑 Shutdown requested via dashboard")
+    
+    # 1. Stop background threads in this module
+    global _running_emitter
+    _running_emitter = False
+    
+    # 2. Stop core monitor components
+    try:
+        sniffer.stop()
+    except Exception as e:
+        logger.error(f"Error stopping sniffer: {e}")
+        
+    try:
+        discovery.stop_background_scan()
+    except Exception as e:
+        logger.error(f"Error stopping discovery: {e}")
+        
+    try:
+        # Stop fingerprinter if available
+        import network_monitor
+        if getattr(network_monitor, 'FINGERPRINTING_AVAILABLE', False):
+            from device_fingerprint import fingerprinter
+            fingerprinter.stop()
+    except Exception as e:
+        logger.error(f"Error stopping fingerprinter: {e}")
+    
+    # 3. Shutdown Flask/SocketIO
+    # We use a separate thread to exit so we can return the success response first
+    def delayed_exit():
+        time.sleep(1)
+        logger.info("System process exiting.")
+        os._exit(0)
+    
+    threading.Thread(target=delayed_exit, daemon=True).start()
+    
+    return jsonify({'success': True, 'message': 'System is shutting down...'})
+
+
 @app.route('/api/device/<mac>/monitor', methods=['POST'])
 def toggle_monitoring(mac):
     """Toggle active monitoring (MITM) for a device"""
@@ -134,8 +201,15 @@ def toggle_monitoring(mac):
 @socketio.on('connect')
 def handle_connect():
     """Handle client connection"""
+    logger.info(f"🟢 Dashboard client connected from {request.remote_addr}")
     emit('connected', {'status': 'ok'})
-    logger.info("Dashboard client connected")
+
+
+@socketio.on('disconnect')
+def handle_disconnect():
+    """Handle client disconnection"""
+    logger.info("🔴 Dashboard client disconnected")
+
 
 
 @socketio.on('request_update')
@@ -147,9 +221,11 @@ def handle_update_request():
     emit('stats_update', {'summary': summary, 'top_talkers': talkers, 'live_stats': live_stats})
 
 
+_running_emitter = True
+
 def background_emitter():
     """Background thread to emit periodic updates"""
-    while True:
+    while _running_emitter:
         time.sleep(5)
         try:
             summary = db.get_dashboard_summary()
@@ -157,17 +233,29 @@ def background_emitter():
             live_stats = sniffer.get_live_stats()
             socketio.emit('stats_update', {'summary': summary, 'top_talkers': talkers, 'live_stats': live_stats})
         except Exception as e:
-            logger.error(f"Background emitter error: {e}")
+            if _running_emitter:
+                logger.error(f"Background emitter error: {e}")
 
 
 def start_dashboard(host: str = DASHBOARD_HOST, port: int = DASHBOARD_PORT, debug: bool = False):
     """Start the dashboard server"""
+    logger.info(f"🚀 Initializing dashboard server on {host}:{port}...")
+    
     # Start background update thread
     update_thread = threading.Thread(target=background_emitter, daemon=True)
     update_thread.start()
+    logger.info("📡 Background stats emitter thread started")
     
-    logger.info(f"Starting dashboard at http://{host}:{port}")
-    socketio.run(app, host=host, port=port, debug=debug, allow_unsafe_werkzeug=True)
+    try:
+        logger.info(f"🌐 Dashboard is LIVE at http://{host}:{port}")
+        # When using eventlet, we should avoid allow_unsafe_werkzeug=True if possible
+        # and we set debug=False to avoid issues with sudo/threads
+        socketio.run(app, host=host, port=port, debug=False, log_output=True)
+    except Exception as e:
+        logger.error(f"❌ Failed to start dashboard: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
+
 
 
 if __name__ == '__main__':

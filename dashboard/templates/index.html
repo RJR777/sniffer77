@@ -24,9 +24,15 @@
                 <div class="logo-icon">🌐</div>
                 <span class="logo-text">Network Monitor</span>
             </div>
-            <div class="status-indicator">
-                <span class="status-dot" id="connectionStatus"></span>
-                <span id="statusText">Connecting...</span>
+            <div class="header-right" style="display: flex; align-items: center; gap: 20px;">
+                <div class="status-indicator">
+                    <span class="status-dot" id="connectionStatus"></span>
+                    <span id="statusText">Connecting...</span>
+                </div>
+                <button class="shutdown-btn" onclick="confirmShutdown()" title="Shutdown System"
+                    style="background: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; color: #ef4444; padding: 6px 12px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-weight: 600; transition: all 0.2s;">
+                    <span style="font-size: 1.1em;">⏻</span> Shutdown
+                </button>
             </div>
         </div>
     </header>
@@ -245,46 +251,60 @@
                 return;
             }
 
-            grid.innerHTML = devices.map(device => `
+            grid.innerHTML = devices.map(device => {
+                const osIcon = device.os_type && device.os_type.toLowerCase().includes('windows') ? '🪟' :
+                    device.os_type && device.os_type.toLowerCase().includes('apple') ? '🍎' :
+                        device.os_type && device.os_type.toLowerCase().includes('android') ? '🤖' :
+                            device.os_type && device.os_type.toLowerCase().includes('linux') ? '🐧' : '💻';
+
+                return `
                 <div class="device-card ${device.is_active ? 'active' : ''}">
                     <div class="device-header">
                         <div class="device-info">
-                            <div class="device-name">
-                                ${device.custom_name || device.hostname || 'Unknown Device'}
+                            <div class="device-name" style="font-size: 1.1rem; font-weight: 700; margin-bottom: 4px;">
+                                ${osIcon} ${device.custom_name || device.hostname || 'Unknown Device'}
                             </div>
-                            <div class="device-manufacturer">${device.manufacturer || 'Unknown Manufacturer'}</div>
+                            <div class="device-manufacturer" style="opacity: 0.8; font-size: 0.9rem;">${device.manufacturer || 'Unknown Manufacturer'}</div>
+                            <div style="display: flex; gap: 8px; margin-top: 8px;">
+                                ${device.device_type ? `<span class="badge badge-info" style="font-size: 0.65rem;">${device.device_type}</span>` : ''}
+                                ${device.os_type ? `<span class="badge badge-success" style="font-size: 0.65rem;">${device.os_type}</span>` : ''}
+                            </div>
                         </div>
-                        <div class="device-status ${device.is_active ? '' : 'inactive'}"></div>
+                        <div class="device-status ${device.is_active ? '' : 'inactive'}" title="${device.is_active ? 'Online' : 'Offline'}"></div>
                     </div>
-                    <div class="device-details">
+                    <div class="device-details" style="display: grid; grid-template-columns: 1fr; gap: 8px;">
                         <div class="device-detail">
-                            <span class="device-detail-label">IP Address</span>
-                            <span class="device-detail-value">${device.ip || 'N/A'}</span>
+                            <span class="device-detail-label">Network Info</span>
+                            <span class="device-detail-value">${device.ip || 'N/A'} • ${device.mac}</span>
                         </div>
+                        ${device.dhcp_lease_display ? `
                         <div class="device-detail">
-                            <span class="device-detail-label">MAC Address</span>
-                            <span class="device-detail-value">${device.mac}</span>
-                        </div>
+                            <span class="device-detail-label">DHCP Lease</span>
+                            <span class="device-detail-value">${device.dhcp_lease_display}</span>
+                        </div>` : ''}
+                        ${device.discovery_methods && device.discovery_methods.length > 0 ? `
                         <div class="device-detail">
-                            <span class="device-detail-label">First Seen</span>
-                            <span class="device-detail-value">${device.first_seen ? formatTime(device.first_seen) : 'N/A'}</span>
-                        </div>
-                        <div class="device-detail">
-                            <span class="device-detail-label">Last Seen</span>
-                            <span class="device-detail-value">${device.last_seen ? formatTime(device.last_seen) : 'N/A'}</span>
-                        </div>
-                        <div class="device-actions" style="margin-top: 10px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 8px;">
-                            <button class="monitor-btn" 
-                                onclick="toggleMonitoring('${device.mac}', this)" 
-                                data-mac="${device.mac}"
-                                style="width: 100%; padding: 6px; border-radius: 4px; border: none; font-weight: 500; cursor: pointer; transition: all 0.2s;"
-                                >
-                                Start Monitoring
-                            </button>
-                        </div>
+                            <span class="device-detail-label">Discovered via</span>
+                            <span class="device-detail-value" style="text-transform: uppercase; font-size: 0.7em; color: var(--accent-secondary); font-weight: 600;">${device.discovery_methods.join(', ')}</span>
+                        </div>` : ''}
                     </div>
-                </div>
-            `).join('');
+                    <div class="device-traffic" style="display: flex; justify-content: space-between; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 12px; margin-top: auto;">
+                        <div class="traffic-item up">🚀 ${device.sent_formatted || '0 B'}</div>
+                        <div class="traffic-item down">☄️ ${device.received_formatted || '0 B'}</div>
+                    </div>
+                    <div class="device-actions">
+                        <button class="monitor-btn" 
+                            onclick="toggleMonitoring('${device.mac}', this)" 
+                            data-mac="${device.mac}"
+                            style="width: 100%; padding: 10px; border-radius: 12px; background: rgba(59, 130, 246, 0.1); color: var(--accent-primary); border: 1px solid rgba(59, 130, 246, 0.2); font-weight: 600; cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);"
+                            onmouseover="this.style.background='rgba(59, 130, 246, 0.2)'; this.style.transform='translateY(-2px)'"
+                            onmouseout="this.style.background='rgba(59, 130, 246, 0.1)'; this.style.transform='translateY(0)'"
+                            >
+                            Start Surveillance
+                        </button>
+                    </div>
+                </div>`;
+            }).join('');
 
             // Restore button states
             document.querySelectorAll('.monitor-btn').forEach(btn => {
@@ -375,6 +395,37 @@
             if (data.top_talkers) updateTopTalkers(data.top_talkers);
             if (data.live_stats) updateLiveStats(data.live_stats);
         });
+
+        // Confirm and trigger system shutdown
+        function confirmShutdown() {
+            if (confirm("Are you sure you want to SHUT DOWN the network monitor and dashboard? This will stop all sniffing and discovery.")) {
+                fetch('/api/shutdown', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            alert("System shutting down. This page will no longer update.");
+                            document.body.innerHTML = `
+                            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #0f172a; color: white; font-family: sans-serif;">
+                                <h1 style="color: #ef4444;">System Offline</h1>
+                                <p>The network monitor has been shut down gracefully.</p>
+                                <button onclick="window.location.reload()" style="margin-top: 20px; padding: 10px 20px; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer;">Reconnect</button>
+                            </div>
+                        `;
+                        } else {
+                            alert("Shutdown failed: " + data.error);
+                        }
+                    })
+                    .catch(err => {
+                        console.error("Shutdown error:", err);
+                        alert("System is shutting down...");
+                    });
+            }
+        }
 
         // Initial data fetch via REST API
         async function fetchInitialData() {
