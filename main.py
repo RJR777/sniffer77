@@ -93,16 +93,16 @@ def run_sniffer_only(args):
         while True:
             time.sleep(5)
             stats = sniffer.get_live_stats()
-            
+
             if stats:
                 print(f"\n--- {time.strftime('%H:%M:%S')} ({len(stats)} active devices) ---")
-                
+
                 sorted_stats = sorted(
                     stats.items(),
                     key=lambda x: x[1]['bytes_sent'] + x[1]['bytes_received'],
                     reverse=True
                 )[:10]
-                
+
                 for mac, s in sorted_stats:
                     sent = s['bytes_sent']
                     recv = s['bytes_received']
@@ -110,7 +110,7 @@ def run_sniffer_only(args):
                     print(f"  {mac} ({mfr:<15}): ↑{sent:>10,} B  ↓{recv:>10,} B")
             else:
                 print(".", end="", flush=True)
-                
+
     except KeyboardInterrupt:
         pass
 

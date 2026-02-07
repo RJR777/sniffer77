@@ -68,3 +68,53 @@
 2026-01-19 13:53:03,681 - network_monitor - INFO - 📡 Starting packet sniffer...
 2026-01-19 13:53:03,681 - network_monitor - ERROR - Cannot start sniffer - scapy not available
 2026-01-19 13:53:03,681 - network_monitor - INFO - 🌐 Starting dashboard at http://0.0.0.0:5000
+2026-01-31 13:22:36,346 - network_monitor - INFO - 📋 Configuration:
+2026-01-31 13:22:36,350 - network_monitor - INFO -    Ethernet: enp2s0
+2026-01-31 13:22:36,350 - network_monitor - INFO -    WiFi: wlp3s0
+2026-01-31 13:22:36,350 - network_monitor - INFO - 🔍 Starting device discovery...
+2026-01-31 13:22:36,350 - network_monitor - INFO - Background device scanning started
+2026-01-31 13:22:36,350 - network_monitor - INFO - 📡 Performing initial network scan...
+2026-01-31 13:22:36,351 - network_monitor - INFO -    Found 0 devices on initial scan
+2026-01-31 13:22:36,351 - network_monitor - INFO - 📡 Starting packet sniffer...
+2026-01-31 13:22:36,351 - network_monitor - ERROR - Cannot start sniffer - scapy not available
+2026-01-31 13:22:36,351 - network_monitor - INFO - 🌐 Starting dashboard at http://0.0.0.0:5000
+2026-01-31 13:25:35,978 - network_monitor - INFO - 📋 Configuration:
+2026-01-31 13:25:35,978 - network_monitor - INFO -    Ethernet: enp2s0
+2026-01-31 13:25:35,978 - network_monitor - INFO -    WiFi: wlp3s0
+2026-01-31 13:25:35,978 - network_monitor - INFO - 🔍 Starting device discovery...
+2026-01-31 13:25:35,979 - network_monitor - INFO - Background device scanning started
+2026-01-31 13:25:35,979 - network_monitor - INFO - 📡 Performing initial network scan...
+2026-01-31 13:25:35,979 - network_monitor - INFO -    Found 0 devices on initial scan
+2026-01-31 13:25:35,979 - network_monitor - INFO - 📡 Starting packet sniffer...
+2026-01-31 13:25:35,979 - network_monitor - ERROR - Cannot start sniffer - scapy not available
+2026-01-31 13:25:35,979 - network_monitor - INFO - 🌐 Starting dashboard at http://0.0.0.0:5000
+2026-01-31 15:21:49,961 - network_monitor - INFO - 📋 Configuration:
+2026-01-31 15:21:49,961 - network_monitor - INFO -    Ethernet: enp2s0
+2026-01-31 15:21:49,961 - network_monitor - INFO -    WiFi: wlp3s0
+2026-01-31 15:21:49,961 - network_monitor - INFO - 🔍 Starting device discovery...
+2026-01-31 15:21:49,961 - network_monitor - INFO - Background device scanning started
+2026-01-31 15:21:49,961 - network_monitor - INFO - 📡 Performing initial network scan...
+2026-01-31 15:21:49,961 - network_monitor - INFO -    Found 0 devices on initial scan
+2026-01-31 15:21:49,961 - network_monitor - INFO - 📡 Starting packet sniffer...
+2026-01-31 15:21:49,961 - network_monitor - ERROR - Cannot start sniffer - scapy not available
+2026-01-31 15:21:49,961 - network_monitor - INFO - 🌐 Starting dashboard at http://0.0.0.0:5000
+2026-01-31 16:51:36,459 - network_monitor - INFO - 📋 Configuration:
+2026-01-31 16:51:36,459 - network_monitor - INFO -    Ethernet: enp2s0
+2026-01-31 16:51:36,459 - network_monitor - INFO -    WiFi: wlp3s0
+2026-01-31 16:51:36,459 - network_monitor - INFO - 🔍 Starting device discovery...
+2026-01-31 16:51:36,459 - network_monitor - INFO - Background device scanning started
+2026-01-31 16:51:36,460 - network_monitor - INFO - 📡 Performing initial network scan...
+2026-01-31 16:51:36,460 - network_monitor - INFO -    Found 0 devices on initial scan
+2026-01-31 16:51:36,460 - network_monitor - INFO - 📡 Starting packet sniffer...
+2026-01-31 16:51:36,460 - network_monitor - ERROR - Cannot start sniffer - scapy not available
+2026-01-31 16:51:36,460 - network_monitor - INFO - 🌐 Starting dashboard at http://0.0.0.0:5000
+2026-02-03 17:16:51,894 - network_monitor - INFO - 📋 Configuration:
+2026-02-03 17:16:51,894 - network_monitor - INFO -    Ethernet: enp2s0
+2026-02-03 17:16:51,894 - network_monitor - INFO -    WiFi: wlp3s0
+2026-02-03 17:16:51,894 - network_monitor - INFO - 🔍 Starting device discovery...
+2026-02-03 17:16:51,894 - network_monitor - INFO - Background device scanning started
+2026-02-03 17:16:51,895 - network_monitor - INFO - 📡 Performing initial network scan...
+2026-02-03 17:16:51,895 - network_monitor - INFO -    Found 0 devices on initial scan
+2026-02-03 17:16:51,895 - network_monitor - INFO - 📡 Starting packet sniffer...
+2026-02-03 17:16:51,895 - network_monitor - ERROR - Cannot start sniffer - scapy not available
+2026-02-03 17:16:51,895 - network_monitor - INFO - 🌐 Starting dashboard at http://0.0.0.0:5000
