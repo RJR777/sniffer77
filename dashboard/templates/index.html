@@ -145,9 +145,13 @@
     </main>
 
     <script>
-        // Socket.IO connection
-        const socket = io();
+        // Socket.IO connection - Force only websocket transport to avoid HTTP GET polling
+        const socket = io({
+            transports: ['websocket'],
+            upgrade: false
+        });
         let isConnected = false;
+
         // Track monitoring state locally
         const monitoringState = {};
 
@@ -390,11 +394,13 @@
         });
 
         socket.on('stats_update', (data) => {
-            console.log('Received stats update');
+            console.log('Received unified websocket stats update');
             if (data.summary) updateSummary(data.summary);
+            if (data.devices) updateDevices(data.devices);
             if (data.top_talkers) updateTopTalkers(data.top_talkers);
             if (data.live_stats) updateLiveStats(data.live_stats);
         });
+
 
         // Confirm and trigger system shutdown
         function confirmShutdown() {
@@ -427,42 +433,9 @@
             }
         }
 
-        // Initial data fetch via REST API
-        async function fetchInitialData() {
-            try {
-                // Fetch summary
-                const summaryRes = await fetch('/api/summary');
-                const summary = await summaryRes.json();
-                updateSummary(summary);
+        // Pure WebSocket architecture: No initial fetch, no setInterval.
+        // Data will flow in as soon as the socket connects via 'stats_update'.
 
-                // Fetch devices
-                const devicesRes = await fetch('/api/devices');
-                const devices = await devicesRes.json();
-                updateDevices(devices);
-
-                // Fetch top talkers
-                const talkersRes = await fetch('/api/top-talkers');
-                const talkers = await talkersRes.json();
-                updateTopTalkers(talkers);
-
-            } catch (error) {
-                console.error('Error fetching initial data:', error);
-            }
-        }
-
-        // Periodic refresh for devices (in case WebSocket misses updates)
-        setInterval(async () => {
-            try {
-                const devicesRes = await fetch('/api/devices');
-                const devices = await devicesRes.json();
-                updateDevices(devices);
-            } catch (e) {
-                console.warn('Failed to refresh devices');
-            }
-        }, 15000);
-
-        // Initialize
-        fetchInitialData();
     </script>
 </body>
 

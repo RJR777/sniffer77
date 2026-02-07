@@ -25,7 +25,9 @@ app = Flask(__name__)
 app.config['SECRET_KEY'] = SECRET_KEY
 
 # Use eventlet or gevent if available for better websocket performance
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet')
+# Force only websocket transport to avoid HTTP GET polling logs
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', transports=['websocket'])
+
 
 
 
@@ -218,7 +220,14 @@ def handle_update_request():
     summary = db.get_dashboard_summary()
     talkers = db.get_top_talkers(hours=1, limit=10)
     live_stats = sniffer.get_live_stats()
-    emit('stats_update', {'summary': summary, 'top_talkers': talkers, 'live_stats': live_stats})
+    devices = api_devices().get_json() # Reuse logic from the API endpoint
+    emit('stats_update', {
+        'summary': summary, 
+        'top_talkers': talkers, 
+        'live_stats': live_stats,
+        'devices': devices
+    })
+
 
 
 _running_emitter = True
@@ -231,10 +240,17 @@ def background_emitter():
             summary = db.get_dashboard_summary()
             talkers = db.get_top_talkers(hours=1, limit=10)
             live_stats = sniffer.get_live_stats()
-            socketio.emit('stats_update', {'summary': summary, 'top_talkers': talkers, 'live_stats': live_stats})
+            devices = api_devices().get_json()
+            socketio.emit('stats_update', {
+                'summary': summary, 
+                'top_talkers': talkers, 
+                'live_stats': live_stats,
+                'devices': devices
+            })
         except Exception as e:
             if _running_emitter:
                 logger.error(f"Background emitter error: {e}")
+
 
 
 def start_dashboard(host: str = DASHBOARD_HOST, port: int = DASHBOARD_PORT, debug: bool = False):
