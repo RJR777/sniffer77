@@ -1,4 +1,4 @@
-# Forescout Certified Associate (FCA) Study Guide
+# Forescout Certified Administrator (FSCA) Study Guide
 ## Complete Product Portfolio & Exam Preparation — 2026 Edition
 
 ---
@@ -46,7 +46,7 @@ The **Forescout 4D Platform™** is the unified architecture that powers all For
 
 ## Core Products (Exam Focus)
 
-These four products form the foundation of the FCA exam.
+These four products form the foundation of the FSCA exam.
 
 ---
 
@@ -246,7 +246,7 @@ eyeExtend is a **collection of integration modules** that connect Forescout to t
 
 ## Specialized Products
 
-These products are NOT heavily tested on the FCA exam but are part of the complete platform.
+These products are NOT heavily tested on the FSCA exam but are part of the complete platform.
 
 ---
 
