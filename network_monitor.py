@@ -483,22 +483,28 @@ class PacketSniffer:
         self._detect_local_addresses()
     
     def _detect_local_addresses(self):
-        """Detect local MAC and IP addresses"""
+        """Detect local MAC and IP addresses by interface"""
         if not SCAPY_AVAILABLE:
             return
+        self._iface_info = {} # interface -> {'mac': mac, 'ip': ip}
         try:
             for iface in self.interfaces:
+                if not os.path.exists(f"/sys/class/net/{iface}"):
+                    continue
                 try:
                     mac = get_if_hwaddr(iface)
                     ip = get_if_addr(iface)
                     if mac:
-                        self._local_macs.add(mac.upper())
-                    if ip and ip != '0.0.0.0':
-                        self._local_ips.add(ip)
+                        mac = mac.upper()
+                        self._local_macs.add(mac)
+                        if ip and ip != '0.0.0.0':
+                            self._local_ips.add(ip)
+                            self._iface_info[iface] = {'mac': mac, 'ip': ip}
                 except Exception:
                     pass
         except Exception as e:
             logger.warning(f"Could not detect local addresses: {e}")
+
     
     def add_callback(self, callback: Callable):
         """Add callback for packet events"""
@@ -688,19 +694,23 @@ class PacketSniffer:
         
         if active_found:
             logger.info(f"Packet sniffer started on: {', '.join(active_found)}")
-            # Register the host machine itself so it shows on the dashboard
-            for mac in self._local_macs:
-                ip = next(iter(self._local_ips)) if self._local_ips else '127.0.0.1'
-                discovery.process_packet_device(mac, ip)
-                if FINGERPRINTING_AVAILABLE:
-                    fingerprinter.register_ip_mac(ip, mac)
-                    # Label as local host
-                    if mac in fingerprinter.devices:
-                        fingerprinter.devices[mac].device_type = "Host Machine"
-                        fingerprinter.devices[mac].hostname = socket.gethostname()
-                        fingerprinter.devices[mac].discovery_methods.append('local')
+            # Register only the host machine interfaces that are actually UP
+            for iface in active_found:
+                info = self._iface_info.get(iface)
+                if info:
+                    mac, ip = info['mac'], info['ip']
+                    discovery.process_packet_device(mac, ip)
+                    if FINGERPRINTING_AVAILABLE:
+                        fingerprinter.register_ip_mac(ip, mac)
+                        if mac in fingerprinter.devices:
+                            fingerprinter.devices[mac].device_type = "Host Machine"
+                            # Distinguish between interfaces
+                            iface_type = "Eth" if "e" in iface.lower() else "WiFi"
+                            fingerprinter.devices[mac].hostname = f"{socket.gethostname()} ({iface_type})"
+                            fingerprinter.devices[mac].discovery_methods.append('local')
         else:
             logger.warning("No active network interfaces found to sniff!")
+
 
 
     
@@ -802,12 +812,27 @@ class ArpSpoofer:
             logger.error(f"Could not enable IP forwarding: {e}")
             logger.error("Traffic will be dropped! Run: echo 1 > /proc/sys/net/ipv4/ip_forward")
 
+        # Try to find default interface if multiple are active
+        self._interface = None
+        gateways = conf.route.routes
+        if gateways:
+            # Look for default route (destination 0.0.0.0)
+            for r in gateways:
+                if r[0] == 0:
+                    self._interface = r[3]
+                    break
+        
+        # Fallback to first sniffing interface if route extraction fails
+        if not self._interface:
+            self._interface = sniffer.interfaces[0]
+
         self._gateway_ip, self._gateway_mac = self.get_gateway_info()
         if not self._gateway_ip or not self._gateway_mac:
-            logger.error("Could not find default gateway. MITM failed.")
+            logger.error(f"Could not find default gateway on {self._interface}. MITM failed.")
             return
 
-        logger.info(f"Gateway found: {self._gateway_ip} ({self._gateway_mac})")
+        logger.info(f"Gateway found on {self._interface}: {self._gateway_ip} ({self._gateway_mac})")
+
         
         self._running = True
         self._spoof_thread = threading.Thread(target=self._spoof_loop, daemon=True)
@@ -846,13 +871,14 @@ class ArpSpoofer:
             time.sleep(2)  # Send every 2 seconds
 
     def _send_spoof(self, dst_ip, dst_mac, src_ip):
-        """Send a single spoofed ARP response"""
+        """Send a single spoofed ARP response on the specific interface"""
         # op=2 is 'is-at' (ARP Reply)
-        # Must wrap in Ether() to specify destination MAC explicitly
+        # We must set both Ether dst AND ARP hwdst to the target's MAC
         packet = Ether(dst=dst_mac) / ARP(op=2, pdst=dst_ip, hwdst=dst_mac, psrc=src_ip)
-        # scapy send without verbose
         from scapy.all import sendp
-        sendp(packet, verbose=False)
+        sendp(packet, iface=self._interface, verbose=False)
+
+
 
     def _restore(self, gateway_ip, gateway_mac, target_ip, target_mac):
         """Restore ARP tables to correct values"""

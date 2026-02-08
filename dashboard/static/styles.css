@@ -277,6 +277,36 @@ body {
     box-shadow: var(--shadow-glow);
 }
 
+.monitor-btn {
+    width: 100%;
+    padding: 10px;
+    border-radius: 12px;
+    background: rgba(59, 130, 246, 0.1);
+    color: var(--accent-primary);
+    border: 1px solid rgba(59, 130, 246, 0.2);
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.monitor-btn:hover {
+    background: rgba(59, 130, 246, 0.2);
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.15);
+}
+
+.monitor-btn.active {
+    background: var(--accent-danger) !important;
+    border-color: rgba(239, 68, 68, 0.3) !important;
+    color: white !important;
+}
+
+.monitor-btn.active:hover {
+    background: #dc2626 !important;
+    box-shadow: 0 4px 12px rgba(239, 68, 68, 0.25);
+}
+
+
 
 .device-card.active {
     border-color: var(--accent-success);

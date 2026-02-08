@@ -157,15 +157,15 @@
 
         function setButtonActive(btn) {
             btn.textContent = 'Stop Monitoring';
-            btn.style.background = '#ef4444'; // Red
-            btn.style.color = 'white';
+            btn.classList.add('active');
         }
 
+
         function setButtonInactive(btn) {
-            btn.textContent = 'Start Monitoring';
-            btn.style.background = '#10b981'; // Green
-            btn.style.color = 'white';
+            btn.textContent = 'Start Surveillance'; // Or 'Start Monitoring'
+            btn.classList.remove('active');
         }
+
 
         async function toggleMonitoring(mac, btn) {
             const isMonitoring = monitoringState[mac];
@@ -299,13 +299,10 @@
                     <div class="device-actions">
                         <button class="monitor-btn" 
                             onclick="toggleMonitoring('${device.mac}', this)" 
-                            data-mac="${device.mac}"
-                            style="width: 100%; padding: 10px; border-radius: 12px; background: rgba(59, 130, 246, 0.1); color: var(--accent-primary); border: 1px solid rgba(59, 130, 246, 0.2); font-weight: 600; cursor: pointer; transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);"
-                            onmouseover="this.style.background='rgba(59, 130, 246, 0.2)'; this.style.transform='translateY(-2px)'"
-                            onmouseout="this.style.background='rgba(59, 130, 246, 0.1)'; this.style.transform='translateY(0)'"
-                            >
+                            data-mac="${device.mac}">
                             Start Surveillance
                         </button>
+
                     </div>
                 </div>`;
             }).join('');

@@ -1,12 +1,8 @@
 import os
 import sys
 
-# Apply eventlet monkey patch before other imports
-try:
-    import eventlet
-    eventlet.monkey_patch()
-except ImportError:
-    pass
+# eventlet monkey patching removed to avoid conflicts with scapy raw sockets
+
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -24,9 +20,10 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 app.config['SECRET_KEY'] = SECRET_KEY
 
-# Use eventlet or gevent if available for better websocket performance
+# Use threading mode for better compatibility with scapy raw sockets
 # Force only websocket transport to avoid HTTP GET polling logs
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='eventlet', transports=['websocket'])
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', transports=['websocket'])
+
 
 
 
