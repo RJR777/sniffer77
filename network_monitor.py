@@ -84,7 +84,7 @@ ACTIVE_INTERFACES = None
 DATABASE_PATH = os.path.join(os.path.dirname(__file__), 'network_data.db')
 
 # Device discovery settings
-ARP_SCAN_INTERVAL = 60
+ARP_SCAN_INTERVAL = 0  # 0 = disabled, rely on passive traffic discovery
 DEVICE_TIMEOUT = 300
 
 # Packet capture settings
@@ -210,9 +210,12 @@ class DataStore:
             cursor.execute('''
                 INSERT INTO devices (mac, ip, hostname, manufacturer, device_type, metadata, last_seen, is_active)
                 VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, 1)
-                ON CONFLICT(mac) DO UPDATE SET ip = COALESCE(excluded.ip, ip),
+                ON CONFLICT(mac) DO UPDATE SET 
+                    ip = COALESCE(excluded.ip, ip),
                     hostname = COALESCE(excluded.hostname, hostname),
                     manufacturer = COALESCE(excluded.manufacturer, manufacturer),
+                    device_type = COALESCE(excluded.device_type, device_type),
+                    metadata = COALESCE(excluded.metadata, metadata),
                     last_seen = CURRENT_TIMESTAMP, is_active = 1
             ''', (mac, ip, hostname, manufacturer, device_type, json.dumps(metadata) if metadata else None))
     
@@ -391,6 +394,13 @@ class DeviceDiscovery:
                                 manufacturer=device_info['manufacturer'],
                                 metadata={'is_virtual': device_info['is_virtual']})
                 
+                # Register IP-MAC mapping and queue for active probing
+                if FINGERPRINTING_AVAILABLE:
+                    fingerprinter.register_ip_mac(ip, mac)
+                    # Only probe if manufacturer is Unknown (randomized MAC or missing OUI)
+                    if device_info['manufacturer'] == 'Unknown':
+                        fingerprinter.probe_ip(ip)
+                
                 logger.info(f"Discovered: {ip} ({mac}) - {device_info['manufacturer']}")
                 self._notify_callbacks(device)
                 
@@ -424,6 +434,11 @@ class DeviceDiscovery:
         if self._running:
             return
         
+        # Interval 0 means disabled - rely on passive discovery
+        if interval == 0:
+            logger.info("ARP scanning disabled - relying on passive traffic discovery")
+            return
+        
         self._running = True
         
         def scan_loop():
@@ -438,7 +453,7 @@ class DeviceDiscovery:
         
         self._scan_thread = threading.Thread(target=scan_loop, daemon=True)
         self._scan_thread.start()
-        logger.info("Background device scanning started")
+        logger.info(f"Background device scanning started (interval: {interval}s)")
     
     def stop_background_scan(self):
         """Stop background scanning"""
@@ -538,6 +553,102 @@ class PacketSniffer:
         """Get service name from port number"""
         return KNOWN_PORTS.get(port, f'port-{port}')
     
+    def _extract_sni(self, data: bytes) -> Optional[str]:
+        """
+        Extract SNI (Server Name Indication) from TLS Client Hello packet.
+        SNI is sent in cleartext and reveals the hostname for HTTPS connections.
+        """
+        try:
+            # Check if this is a TLS handshake
+            if len(data) < 6:
+                return None
+            
+            # TLS Record: ContentType=22 (Handshake), Version, Length
+            if data[0] != 0x16:  # Not a handshake
+                return None
+            
+            # Skip TLS record header (5 bytes)
+            offset = 5
+            
+            # Handshake: Type=1 (ClientHello)
+            if data[offset] != 0x01:
+                return None
+            
+            # Skip handshake header
+            offset += 4  # type (1) + length (3)
+            
+            # Skip client version (2) + random (32) 
+            offset += 2 + 32
+            
+            # Skip session ID
+            if offset >= len(data):
+                return None
+            session_id_len = data[offset]
+            offset += 1 + session_id_len
+            
+            # Skip cipher suites
+            if offset + 2 > len(data):
+                return None
+            cipher_len = (data[offset] << 8) + data[offset + 1]
+            offset += 2 + cipher_len
+            
+            # Skip compression methods
+            if offset >= len(data):
+                return None
+            comp_len = data[offset]
+            offset += 1 + comp_len
+            
+            # Extensions length
+            if offset + 2 > len(data):
+                return None
+            ext_len = (data[offset] << 8) + data[offset + 1]
+            offset += 2
+            
+            # Parse extensions looking for SNI (type 0)
+            ext_end = offset + ext_len
+            while offset + 4 <= ext_end and offset + 4 <= len(data):
+                ext_type = (data[offset] << 8) + data[offset + 1]
+                ext_len_inner = (data[offset + 2] << 8) + data[offset + 3]
+                offset += 4
+                
+                if ext_type == 0:  # SNI Extension
+                    # SNI list length
+                    if offset + 2 > len(data):
+                        return None
+                    offset += 2  # Skip list length
+                    
+                    # Name type (should be 0 for hostname)
+                    if offset >= len(data) or data[offset] != 0:
+                        return None
+                    offset += 1
+                    
+                    # Name length
+                    if offset + 2 > len(data):
+                        return None
+                    name_len = (data[offset] << 8) + data[offset + 1]
+                    offset += 2
+                    
+                    # Extract hostname
+                    if offset + name_len <= len(data):
+                        return data[offset:offset + name_len].decode('ascii', errors='ignore')
+                    return None
+                
+                offset += ext_len_inner
+            
+        except Exception:
+            pass
+        return None
+    
+    def _record_sni(self, ip: str, mac: str, sni: str):
+        """Record SNI hostname for traffic analysis"""
+        # Log first time we see this domain from this device
+        key = f"{mac}:{sni}"
+        if not hasattr(self, '_seen_sni'):
+            self._seen_sni = set()
+        if key not in self._seen_sni:
+            self._seen_sni.add(key)
+            logger.info(f"🔒 [HTTPS] {ip} -> {sni}")
+    
     def _process_packet(self, packet):
         """Process a captured packet"""
         try:
@@ -591,6 +702,12 @@ class PacketSniffer:
                             fingerprinter.process_http(packet)
                         except Exception as e:
                             logger.debug(f"HTTP UA error: {e}")
+                    # Extract SNI from HTTPS TLS handshakes
+                    elif dst_port == 443 and tcp.payload:
+                        sni = self._extract_sni(bytes(tcp.payload))
+                        if sni:
+                            service = f"HTTPS:{sni}"
+                            self._record_sni(src_ip, src_mac, sni)
                 elif packet.haslayer(UDP):
                     protocol = 'UDP'
                     udp = packet[UDP]
@@ -818,10 +935,19 @@ class ArpSpoofer:
             logger.error(f"Error finding gateway: {e}")
             return None, None
 
-    def add_target(self, ip: str, mac: str):
+    def add_target(self, ip: str, mac: str = None):
         """Add a target to spoof"""
+        # Resolve MAC if not provided or invalid
+        if not mac or mac == 'unknown':
+            resolved_mac = self._resolve_mac(ip)
+            if resolved_mac:
+                mac = resolved_mac
+            else:
+                logger.warning(f"Cannot add target {ip}: MAC not resolvable")
+                return
+        
         with self._lock:
-            self._targets[ip] = mac
+            self._targets[ip] = mac.upper()
             logger.info(f"Active monitoring target added: {ip} ({mac})")
 
     def remove_target(self, ip: str):
@@ -936,17 +1062,23 @@ class ArpSpoofer:
     def _restore(self, gateway_ip, gateway_mac, target_ip, target_mac):
         """Restore ARP tables to correct values"""
         try:
+            # Validate we have all required MACs
+            if not all([gateway_ip, gateway_mac, target_ip, target_mac]):
+                logger.debug(f"Cannot restore ARP - missing info: gw={gateway_mac}, target={target_mac}")
+                return
+                
             logger.info(f"Restoring ARP table for {target_ip}...")
-            # Send correct info to target
-            packet1 = ARP(op=2, pdst=target_ip, hwdst=target_mac, psrc=gateway_ip, hwsrc=gateway_mac)
-            # Send correct info to gateway
-            packet2 = ARP(op=2, pdst=gateway_ip, hwdst=gateway_mac, psrc=target_ip, hwsrc=target_mac)
+            from scapy.all import sendp
             
-            from scapy.all import send
-            send(packet1, count=5, verbose=False)
-            send(packet2, count=5, verbose=False)
-        except Exception:
-            pass
+            # Send correct info to target (gateway's real MAC)
+            packet1 = Ether(dst=target_mac) / ARP(op=2, pdst=target_ip, hwdst=target_mac, psrc=gateway_ip, hwsrc=gateway_mac)
+            # Send correct info to gateway (target's real MAC)
+            packet2 = Ether(dst=gateway_mac) / ARP(op=2, pdst=gateway_ip, hwdst=gateway_mac, psrc=target_ip, hwsrc=target_mac)
+            
+            sendp(packet1, iface=self._interface, count=5, verbose=False)
+            sendp(packet2, iface=self._interface, count=5, verbose=False)
+        except Exception as e:
+            logger.debug(f"ARP restore error: {e}")
 
 # Initialize singletons
 sniffer = PacketSniffer()

@@ -949,6 +949,249 @@ class HTTPUserAgentParser:
 
 
 # ==========================================
+# ACTIVE DEVICE PROBER
+# ==========================================
+
+# Port-to-device-type mapping for quick identification
+PORT_DEVICE_MAP = {
+    22: ('SSH Server', 'Linux/Unix'),
+    80: ('Web Server', 'IoT/Router'),
+    443: ('HTTPS Server', None),
+    445: ('SMB/Windows', 'Windows'),
+    548: ('AFP Share', 'macOS'),
+    554: ('RTSP Camera', 'Camera'),
+    3689: ('iTunes/DAAP', 'Apple'),
+    5000: ('Synology DSM', 'NAS'),
+    5353: ('mDNS', None),
+    7000: ('AirPlay', 'Apple TV'),
+    8008: ('Chromecast', 'Chromecast'),
+    8009: ('Chromecast', 'Chromecast'),
+    8060: ('Roku', 'Roku'),
+    8080: ('Web Proxy', 'IoT'),
+    8443: ('HTTPS Alt', None),
+    9000: ('Sonos', 'Sonos'),
+    9080: ('Smart TV', 'Smart TV'),
+    32400: ('Plex', 'Media Server'),
+    62078: ('iPhone Lockdown', 'iPhone/iPad'),
+}
+
+# mDNS service queries for active discovery
+MDNS_PROBE_SERVICES = [
+    '_apple-mobdev2._tcp.local',   # iPhone/iPad
+    '_companion-link._tcp.local',  # Apple devices
+    '_googlecast._tcp.local',      # Chromecast
+    '_airplay._tcp.local',         # Apple TV
+    '_raop._tcp.local',            # AirPlay audio
+    '_spotify-connect._tcp.local', # Spotify
+    '_ipp._tcp.local',             # Printers
+    '_smb._tcp.local',             # Windows shares
+    '_homekit._tcp.local',         # HomeKit
+    '_sonos._tcp.local',           # Sonos
+    '_hue._tcp.local',             # Philips Hue
+]
+
+
+class ActiveProber:
+    """
+    Actively probes devices to identify them.
+    Uses mDNS queries, SSDP M-SEARCH, and port scanning.
+    """
+    
+    def __init__(self, callback: Callable[[str, Dict], None] = None):
+        """
+        callback: function(ip, info_dict) called when device info is discovered
+        """
+        self.callback = callback
+        self._running = False
+        self._probe_thread = None
+        self._pending_ips: List[str] = []
+        self._lock = threading.Lock()
+        self.results: Dict[str, Dict] = {}  # IP -> discovered info
+    
+    def start(self):
+        """Start the background probing thread"""
+        if self._running:
+            return
+        self._running = True
+        self._probe_thread = threading.Thread(target=self._probe_loop, daemon=True)
+        self._probe_thread.start()
+        logger.info("🔍 Active device prober started")
+    
+    def stop(self):
+        """Stop the prober"""
+        self._running = False
+        if self._probe_thread:
+            self._probe_thread.join(timeout=2)
+        logger.info("Active device prober stopped")
+    
+    def queue_probe(self, ip: str):
+        """Add an IP to the probe queue"""
+        with self._lock:
+            if ip not in self._pending_ips:
+                self._pending_ips.append(ip)
+    
+    def _probe_loop(self):
+        """Background loop that probes queued IPs"""
+        # Initial mDNS broadcast
+        self._send_mdns_queries()
+        self._send_ssdp_msearch()
+        
+        while self._running:
+            ip_to_probe = None
+            with self._lock:
+                if self._pending_ips:
+                    ip_to_probe = self._pending_ips.pop(0)
+            
+            if ip_to_probe:
+                self._probe_device(ip_to_probe)
+            else:
+                time.sleep(1)
+    
+    def _probe_device(self, ip: str):
+        """Probe a single device with multiple methods"""
+        info = {'ip': ip}
+        
+        # Port-based detection (quick scan)
+        open_ports = self._scan_ports(ip)
+        if open_ports:
+            info['open_ports'] = open_ports
+            # Identify device from ports
+            for port in open_ports:
+                if port in PORT_DEVICE_MAP:
+                    device_type, os_hint = PORT_DEVICE_MAP[port]
+                    if device_type:
+                        info['device_type'] = device_type
+                    if os_hint:
+                        info['os_type'] = os_hint
+                    break
+        
+        # NetBIOS query for Windows hostnames
+        hostname = self._query_netbios(ip)
+        if hostname:
+            info['hostname'] = hostname
+            info['os_type'] = 'Windows'
+        
+        if info.get('device_type') or info.get('hostname'):
+            self.results[ip] = info
+            if self.callback:
+                self.callback(ip, info)
+            logger.info(f"🔍 [Probe] {ip} -> {info.get('device_type', 'Unknown')} ({info.get('hostname', 'no hostname')})")
+    
+    def _scan_ports(self, ip: str, timeout: float = 0.5) -> List[int]:
+        """Quick port scan for device identification"""
+        open_ports = []
+        # Priority ports for home devices
+        ports_to_check = [62078, 8060, 8008, 9000, 554, 32400, 7000, 80, 22, 445]
+        
+        for port in ports_to_check:
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.settimeout(timeout)
+                result = sock.connect_ex((ip, port))
+                sock.close()
+                if result == 0:
+                    open_ports.append(port)
+                    # Early exit once we identify key ports
+                    if port in [62078, 8060, 8008]:
+                        break
+            except:
+                pass
+        
+        return open_ports
+    
+    def _query_netbios(self, ip: str, timeout: float = 1.0) -> Optional[str]:
+        """Query NetBIOS name for Windows devices"""
+        try:
+            # NetBIOS Name Service query
+            query = (
+                b'\x80\x94\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00'
+                b'\x20CKAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\x00'
+                b'\x00\x21\x00\x01'
+            )
+            
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            sock.settimeout(timeout)
+            sock.sendto(query, (ip, 137))
+            
+            data, _ = sock.recvfrom(1024)
+            sock.close()
+            
+            # Parse response - name is at offset 57
+            if len(data) > 57:
+                name_count = data[56]
+                if name_count > 0:
+                    name = data[57:57+15].decode('ascii', errors='ignore').strip()
+                    return name
+        except:
+            pass
+        return None
+    
+    def _send_mdns_queries(self):
+        """Send mDNS PTR queries for common services"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
+            
+            for service in MDNS_PROBE_SERVICES:
+                # Build mDNS PTR query
+                query = self._build_mdns_query(service)
+                sock.sendto(query, ('224.0.0.251', 5353))
+                time.sleep(0.05)  # Small delay between queries
+            
+            sock.close()
+            logger.debug("mDNS service queries sent")
+        except Exception as e:
+            logger.debug(f"mDNS probe error: {e}")
+    
+    def _build_mdns_query(self, name: str) -> bytes:
+        """Build an mDNS PTR query packet"""
+        # Transaction ID (0 for mDNS)
+        packet = b'\x00\x00'
+        # Flags (standard query)
+        packet += b'\x00\x00'
+        # Questions: 1, Answers: 0, Authority: 0, Additional: 0
+        packet += b'\x00\x01\x00\x00\x00\x00\x00\x00'
+        
+        # Encode the name
+        for part in name.split('.'):
+            packet += bytes([len(part)]) + part.encode('ascii')
+        packet += b'\x00'
+        
+        # Type: PTR (12), Class: IN (1)
+        packet += b'\x00\x0c\x00\x01'
+        
+        return packet
+    
+    def _send_ssdp_msearch(self):
+        """Send SSDP M-SEARCH to discover UPnP devices"""
+        try:
+            msg = (
+                'M-SEARCH * HTTP/1.1\r\n'
+                'HOST: 239.255.255.250:1900\r\n'
+                'MAN: "ssdp:discover"\r\n'
+                'MX: 3\r\n'
+                'ST: ssdp:all\r\n'
+                '\r\n'
+            ).encode('utf-8')
+            
+            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 2)
+            
+            sock.sendto(msg, ('239.255.255.250', 1900))
+            sock.close()
+            logger.debug("SSDP M-SEARCH sent")
+        except Exception as e:
+            logger.debug(f"SSDP M-SEARCH error: {e}")
+    
+    def probe_all(self, ips: List[str]):
+        """Queue multiple IPs for probing"""
+        for ip in ips:
+            self.queue_probe(ip)
+
+
+# ==========================================
 # UNIFIED DEVICE FINGERPRINTER
 # ==========================================
 
@@ -974,6 +1217,7 @@ class DeviceFingerprinter:
         self.llmnr = LLMNRListener(callback=self._on_llmnr)
         self.wsd = WSDListener(callback=self._on_wsd)
         self.http_ua = HTTPUserAgentParser(callback=self._on_http_ua)
+        self.active_prober = ActiveProber(callback=self._on_probe)
         
         self._running = False
     
@@ -987,9 +1231,10 @@ class DeviceFingerprinter:
         self.ssdp.start()
         self.llmnr.start()
         self.wsd.start()
+        self.active_prober.start()
         # DHCP, NetBIOS, and HTTP UA are called from packet processing, not background threads
         
-        logger.info("📡 Device fingerprinting started (mDNS, SSDP, LLMNR, WSD)")
+        logger.info("📡 Device fingerprinting started (mDNS, SSDP, LLMNR, WSD, Active Probing)")
 
     
     def stop(self):
@@ -999,6 +1244,7 @@ class DeviceFingerprinter:
         self.ssdp.stop()
         self.llmnr.stop()
         self.wsd.stop()
+        self.active_prober.stop()
         logger.info("Device fingerprinting stopped")
     
     def process_dhcp(self, packet):
@@ -1193,6 +1439,35 @@ class DeviceFingerprinter:
         fp.last_updated = datetime.now()
         
         self._notify(mac, fp)
+
+    
+    def _on_probe(self, ip: str, info: Dict):
+        """Handle active probe discovery results"""
+        mac = self.ip_to_mac.get(ip)
+        if not mac:
+            return
+        
+        if mac not in self.devices:
+            self.devices[mac] = DeviceFingerprint(mac=mac, ip=ip)
+        
+        fp = self.devices[mac]
+        if info.get('device_type') and not fp.device_type:
+            fp.device_type = info['device_type']
+        if info.get('os_type') and not fp.os_type:
+            fp.os_type = info['os_type']
+        if info.get('hostname') and not fp.hostname:
+            fp.hostname = info['hostname']
+        if info.get('open_ports'):
+            fp.services.extend([f"port:{p}" for p in info['open_ports'] if f"port:{p}" not in fp.services])
+        if 'probe' not in fp.discovery_methods:
+            fp.discovery_methods.append('probe')
+        fp.last_updated = datetime.now()
+        
+        self._notify(mac, fp)
+    
+    def probe_ip(self, ip: str):
+        """Queue an IP for active probing"""
+        self.active_prober.queue_probe(ip)
 
     
     def _notify(self, mac: str, fingerprint: DeviceFingerprint):

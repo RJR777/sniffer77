@@ -202,7 +202,7 @@
         }
 
         function setButtonInactive(btn) {
-            btn.textContent = 'Start Surveillance';
+            btn.textContent = 'Start Monitoring';
             btn.classList.remove('active');
         }
 
@@ -325,14 +325,22 @@
                         </div>` : ''}
                     </div>
                     <div class="device-traffic" style="display: flex; justify-content: space-between; background: rgba(0,0,0,0.2); padding: 10px; border-radius: 12px; margin-top: auto;">
-                        <div class="traffic-item up">🚀 ${device.sent_formatted || '0 B'}</div>
-                        <div class="traffic-item down">☄️ ${device.received_formatted || '0 B'}</div>
+                        ${monitoringState[device.mac] ? `
+                            <div class="traffic-item up">🚀 ${device.sent_formatted || '0 B'}</div>
+                            <div class="traffic-item down">☄️ ${device.received_formatted || '0 B'}</div>
+                        ` : `
+                            <div style="width: 100%; text-align: center; opacity: 0.7; font-size: 0.8em;">
+                                ${device.services && device.services.length > 0 ?
+                        `<span title="Open ports">🔌 ${device.services.slice(0, 3).join(', ')}</span>` :
+                        `<span>📡 Discovered via ${(device.discovery_methods || ['arp']).join(', ')}</span>`}
+                            </div>
+                        `}
                     </div>
                     <div class="device-actions">
                         <button class="monitor-btn ${monitoringState[device.mac] ? 'active' : ''}" 
                                 onclick="toggleMonitoring('${device.mac}', this)" 
                                 data-mac="${device.mac}">
-                            ${monitoringState[device.mac] ? 'Stop Monitoring' : 'Start Surveillance'}
+                            ${monitoringState[device.mac] ? 'Stop Monitoring' : 'Start Monitoring'}
                         </button>
                     </div>
                 </div>`;

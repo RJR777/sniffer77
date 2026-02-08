@@ -7,8 +7,7 @@ uvicorn[standard]>=0.27.0
 websockets>=12.0
 jinja2>=3.1.0
 
-# OUI database (MAC address manufacturer lookup)
-mac-vendor-lookup>=0.1.12
+# OUI database - uses local Wireshark manuf file (no external dependency needed)
 
 # Network scanning
 netifaces>=0.11.0
