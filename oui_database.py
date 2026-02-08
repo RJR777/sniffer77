@@ -731,13 +731,19 @@ class OUIDatabase:
         # Try mac-vendor-lookup library first
         if self._vendor_lookup:
             try:
-                return self._vendor_lookup.lookup(normalized)
+                import inspect
+                result = self._vendor_lookup.lookup(normalized)
+                # If the library returns a coroutine, we can't use it synchronously
+                if inspect.iscoroutine(result):
+                    return None
+                return result
             except Exception:
                 pass
         
         # Fall back to combined local/cached database
         if oui in self._local_db:
             return self._local_db[oui]
+
         
         # Check partial matches for docker (first 2 bytes)
         partial = normalized[:5]
