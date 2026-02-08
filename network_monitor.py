@@ -396,10 +396,14 @@ class DeviceDiscovery:
                 
                 # Register IP-MAC mapping and queue for active probing
                 if FINGERPRINTING_AVAILABLE:
+                    from device_fingerprint import is_randomized_mac
                     fingerprinter.register_ip_mac(ip, mac)
-                    # Only probe if manufacturer is Unknown (randomized MAC or missing OUI)
+                    # Probe if manufacturer is Unknown (randomized MAC or missing OUI)
                     if device_info['manufacturer'] == 'Unknown':
                         fingerprinter.probe_ip(ip)
+                        # Also label randomized MACs as likely mobile devices
+                        if is_randomized_mac(mac):
+                            db.upsert_device(mac=mac, ip=ip, device_type='Mobile Device')
                 
                 logger.info(f"Discovered: {ip} ({mac}) - {device_info['manufacturer']}")
                 self._notify_callbacks(device)

@@ -18,6 +18,19 @@ from datetime import datetime
 
 logger = logging.getLogger('device_fingerprint')
 
+
+def is_randomized_mac(mac: str) -> bool:
+    """
+    Check if MAC address is randomized (locally administered).
+    Randomized MACs have the second hex digit as 2, 6, A, or E.
+    These indicate the "locally administered" bit is set.
+    """
+    if not mac or len(mac) < 2:
+        return False
+    # Get second character of MAC (e.g., 'E' from "FE:50:...")
+    second_char = mac[1].upper()
+    return second_char in ('2', '6', 'A', 'E')
+
 # ==========================================
 # MDNS LISTENER (Bonjour/Zeroconf)
 # ==========================================
@@ -963,7 +976,9 @@ PORT_DEVICE_MAP = {
     3689: ('iTunes/DAAP', 'Apple'),
     5000: ('Synology DSM', 'NAS'),
     5353: ('mDNS', None),
+    5555: ('Android ADB', 'Android'),  # Android Debug Bridge (developer mode)
     7000: ('AirPlay', 'Apple TV'),
+    8001: ('Samsung Smart TV', 'Samsung TV'),  # Samsung SmartThings
     8008: ('Chromecast', 'Chromecast'),
     8009: ('Chromecast', 'Chromecast'),
     8060: ('Roku', 'Roku'),
@@ -972,6 +987,7 @@ PORT_DEVICE_MAP = {
     9000: ('Sonos', 'Sonos'),
     9080: ('Smart TV', 'Smart TV'),
     32400: ('Plex', 'Media Server'),
+    55000: ('Samsung TV', 'Samsung TV'),  # Samsung remote protocol
     62078: ('iPhone Lockdown', 'iPhone/iPad'),
 }
 
@@ -1080,8 +1096,8 @@ class ActiveProber:
     def _scan_ports(self, ip: str, timeout: float = 0.5) -> List[int]:
         """Quick port scan for device identification"""
         open_ports = []
-        # Priority ports for home devices
-        ports_to_check = [62078, 8060, 8008, 9000, 554, 32400, 7000, 80, 22, 445]
+        # Priority ports for home devices (including Android ADB and Samsung TV)
+        ports_to_check = [62078, 8060, 8008, 8001, 5555, 55000, 9000, 554, 32400, 7000, 80, 22, 445]
         
         for port in ports_to_check:
             try:
