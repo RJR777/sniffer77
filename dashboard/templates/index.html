@@ -28,6 +28,10 @@
                     <span class="status-dot" id="connectionStatus"></span>
                     <span id="statusText">Connecting...</span>
                 </div>
+                <button class="rescan-btn" onclick="rescanNetwork(this)" title="Scan for all devices"
+                    style="background: rgba(59, 130, 246, 0.2); border: 1px solid #3b82f6; color: #3b82f6; padding: 6px 12px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-weight: 600; transition: all 0.2s;">
+                    <span style="font-size: 1.1em;">🔄</span> Rescan
+                </button>
                 <button class="shutdown-btn" onclick="confirmShutdown()" title="Shutdown System"
                     style="background: rgba(239, 68, 68, 0.2); border: 1px solid #ef4444; color: #ef4444; padding: 6px 12px; border-radius: 6px; cursor: pointer; display: flex; align-items: center; gap: 8px; font-weight: 600; transition: all 0.2s;">
                     <span style="font-size: 1.1em;">⏻</span> Shutdown
@@ -399,6 +403,28 @@
                     </tr>
                 `;
             }).join('');
+        }
+
+        async function rescanNetwork(btn) {
+            const originalText = btn.innerHTML;
+            btn.innerHTML = '<span style="font-size: 1.1em;">⏳</span> Scanning...';
+            btn.disabled = true;
+            btn.style.opacity = '0.6';
+
+            try {
+                const response = await fetch('/api/rescan', { method: 'POST' });
+                const data = await response.json();
+                if (data.success) {
+                    btn.innerHTML = `<span style="font-size: 1.1em;">✅</span> Found ${data.devices_found}`;
+                    setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; btn.style.opacity = '1'; }, 2000);
+                } else {
+                    btn.innerHTML = '<span style="font-size: 1.1em;">❌</span> Failed';
+                    setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; btn.style.opacity = '1'; }, 2000);
+                }
+            } catch (e) {
+                btn.innerHTML = '<span style="font-size: 1.1em;">❌</span> Error';
+                setTimeout(() => { btn.innerHTML = originalText; btn.disabled = false; btn.style.opacity = '1'; }, 2000);
+            }
         }
 
         function confirmShutdown() {

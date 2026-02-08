@@ -176,6 +176,22 @@ async def api_devices():
     return JSONResponse(_get_processed_devices(active_only=True))
 
 
+@app.post("/api/rescan")
+async def api_rescan():
+    """Trigger a manual network rescan to discover all devices"""
+    import asyncio
+    try:
+        logger.info("🔄 Manual network rescan triggered")
+        # Run ARP scan in thread pool to not block
+        devices = await asyncio.to_thread(discovery.scan_all_interfaces)
+        count = len(devices)
+        logger.info(f"🔄 Rescan complete: found {count} devices")
+        return JSONResponse({'success': True, 'devices_found': count})
+    except Exception as e:
+        logger.error(f"Rescan failed: {e}")
+        return JSONResponse({'success': False, 'error': str(e)}, status_code=500)
+
+
 @app.get("/api/devices/all")
 async def api_all_devices():
     """Get all devices including inactive"""
