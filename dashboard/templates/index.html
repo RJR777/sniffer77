@@ -12,7 +12,6 @@
         href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
         rel="stylesheet">
     <link rel="stylesheet" href="/static/styles.css">
-    <script src="https://cdn.socket.io/4.6.0/socket.io.min.js"></script>
 </head>
 
 <body>
@@ -145,12 +144,54 @@
     </main>
 
     <script>
-        // Socket.IO connection - Force only websocket transport to avoid HTTP GET polling
-        const socket = io({
-            transports: ['websocket'],
-            upgrade: false
-        });
+        // Native WebSocket connection
+        let socket = null;
         let isConnected = false;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 10;
+
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+
+            socket = new WebSocket(wsUrl);
+
+            socket.onopen = () => {
+                console.log('Connected to server');
+                updateConnectionStatus(true);
+                reconnectAttempts = 0;
+                socket.send(JSON.stringify({ type: 'request_update' }));
+            };
+
+            socket.onclose = () => {
+                console.log('Disconnected from server');
+                updateConnectionStatus(false);
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+                    reconnectAttempts++;
+                    console.log(`Reconnecting in ${delay}ms (attempt ${reconnectAttempts})`);
+                    setTimeout(connectWebSocket, delay);
+                }
+            };
+
+            socket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+            };
+
+            socket.onmessage = (event) => {
+                try {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'connected' || data.type === 'stats_update') {
+                        if (data.summary) updateSummary(data.summary);
+                        if (data.devices) updateDevices(data.devices);
+                        if (data.top_talkers) updateTopTalkers(data.top_talkers);
+                        if (data.live_stats) updateLiveStats(data.live_stats);
+                    }
+                } catch (e) {
+                    console.error('Error parsing WebSocket message:', e);
+                }
+            };
+        }
 
         // Track monitoring state locally
         const monitoringState = {};
@@ -160,18 +201,15 @@
             btn.classList.add('active');
         }
 
-
         function setButtonInactive(btn) {
-            btn.textContent = 'Start Surveillance'; // Or 'Start Monitoring'
+            btn.textContent = 'Start Surveillance';
             btn.classList.remove('active');
         }
-
 
         async function toggleMonitoring(mac, btn) {
             const isMonitoring = monitoringState[mac];
             const action = isMonitoring ? 'stop' : 'start';
 
-            // Optimistic update
             btn.disabled = true;
             btn.textContent = 'Updating...';
 
@@ -192,7 +230,6 @@
                     }
                 } else {
                     alert('Error: ' + data.error);
-                    // Revert state on error
                     if (isMonitoring) setButtonActive(btn);
                     else setButtonInactive(btn);
                 }
@@ -204,7 +241,6 @@
             }
         }
 
-        // Format bytes to human readable
         function formatBytes(bytes) {
             if (bytes === 0 || bytes === undefined || bytes === null) return '0 B';
             const k = 1024;
@@ -213,13 +249,11 @@
             return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
         }
 
-        // Format time
         function formatTime(isoString) {
             const date = new Date(isoString);
             return date.toLocaleTimeString();
         }
 
-        // Update connection status
         function updateConnectionStatus(connected) {
             const dot = document.getElementById('connectionStatus');
             const text = document.getElementById('statusText');
@@ -234,7 +268,6 @@
             }
         }
 
-        // Update summary stats
         function updateSummary(summary) {
             document.getElementById('activeDevices').textContent = summary.active_devices || 0;
             document.getElementById('totalDevices').textContent = `/ ${summary.total_devices || 0} total`;
@@ -246,7 +279,6 @@
             document.getElementById('lastUpdate').textContent = `Updated: ${formatTime(summary.timestamp)}`;
         }
 
-        // Update devices grid
         function updateDevices(devices) {
             const grid = document.getElementById('devicesGrid');
 
@@ -297,28 +329,16 @@
                         <div class="traffic-item down">☄️ ${device.received_formatted || '0 B'}</div>
                     </div>
                     <div class="device-actions">
-                        <button class="monitor-btn" 
-                            onclick="toggleMonitoring('${device.mac}', this)" 
-                            data-mac="${device.mac}">
-                            Start Surveillance
+                        <button class="monitor-btn ${monitoringState[device.mac] ? 'active' : ''}" 
+                                onclick="toggleMonitoring('${device.mac}', this)" 
+                                data-mac="${device.mac}">
+                            ${monitoringState[device.mac] ? 'Stop Monitoring' : 'Start Surveillance'}
                         </button>
-
                     </div>
                 </div>`;
             }).join('');
-
-            // Restore button states
-            document.querySelectorAll('.monitor-btn').forEach(btn => {
-                const mac = btn.getAttribute('data-mac');
-                if (monitoringState[mac]) {
-                    setButtonActive(btn);
-                } else {
-                    setButtonInactive(btn);
-                }
-            });
         }
 
-        // Update top talkers table
         function updateTopTalkers(talkers) {
             const tbody = document.getElementById('topTalkersBody');
 
@@ -340,7 +360,6 @@
             `).join('');
         }
 
-        // Update live stats table
         function updateLiveStats(stats) {
             const tbody = document.getElementById('liveStatsBody');
 
@@ -374,51 +393,23 @@
             }).join('');
         }
 
-        // Socket.IO event handlers
-        socket.on('connect', () => {
-            console.log('Connected to server');
-            updateConnectionStatus(true);
-            socket.emit('request_update');
-        });
-
-        socket.on('disconnect', () => {
-            console.log('Disconnected from server');
-            updateConnectionStatus(false);
-        });
-
-        socket.on('connected', (data) => {
-            console.log('Server acknowledged connection:', data);
-        });
-
-        socket.on('stats_update', (data) => {
-            console.log('Received unified websocket stats update');
-            if (data.summary) updateSummary(data.summary);
-            if (data.devices) updateDevices(data.devices);
-            if (data.top_talkers) updateTopTalkers(data.top_talkers);
-            if (data.live_stats) updateLiveStats(data.live_stats);
-        });
-
-
-        // Confirm and trigger system shutdown
         function confirmShutdown() {
             if (confirm("Are you sure you want to SHUT DOWN the network monitor and dashboard? This will stop all sniffing and discovery.")) {
                 fetch('/api/shutdown', {
                     method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    }
+                    headers: { 'Content-Type': 'application/json' }
                 })
                     .then(response => response.json())
                     .then(data => {
                         if (data.success) {
                             alert("System shutting down. This page will no longer update.");
                             document.body.innerHTML = `
-                            <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #0f172a; color: white; font-family: sans-serif;">
-                                <h1 style="color: #ef4444;">System Offline</h1>
-                                <p>The network monitor has been shut down gracefully.</p>
-                                <button onclick="window.location.reload()" style="margin-top: 20px; padding: 10px 20px; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer;">Reconnect</button>
-                            </div>
-                        `;
+                        <div style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #0f172a; color: white; font-family: sans-serif;">
+                            <h1 style="color: #ef4444;">System Offline</h1>
+                            <p>The network monitor has been shut down gracefully.</p>
+                            <button onclick="window.location.reload()" style="margin-top: 20px; padding: 10px 20px; background: #3b82f6; color: white; border: none; border-radius: 6px; cursor: pointer;">Reconnect</button>
+                        </div>
+                    `;
                         } else {
                             alert("Shutdown failed: " + data.error);
                         }
@@ -430,9 +421,8 @@
             }
         }
 
-        // Pure WebSocket architecture: No initial fetch, no setInterval.
-        // Data will flow in as soon as the socket connects via 'stats_update'.
-
+        // Start WebSocket connection
+        connectWebSocket();
     </script>
 </body>
 

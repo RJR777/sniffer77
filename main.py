@@ -19,24 +19,16 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from network_monitor import INTERFACES, DASHBOARD_PORT, DASHBOARD_HOST, discovery, sniffer, db, arp_spoofer
 
-# Setup logging
-log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'network_monitor.log')
+# Setup logging (stdout only)
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.StreamHandler(sys.stdout),
-        logging.FileHandler(log_path, mode='a')
+        logging.StreamHandler(sys.stdout)
     ]
 )
-# Ensure logger flushes immediately
-for handler in logging.root.handlers:
-    handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-    if hasattr(handler, 'flush'):
-        handler.flush()
 
 logger = logging.getLogger('network_monitor')
-logger.info(f"📝 Logging to: {log_path}")
 
 
 

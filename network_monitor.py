@@ -96,6 +96,25 @@ DASHBOARD_HOST = '0.0.0.0'
 DASHBOARD_PORT = 5000
 SECRET_KEY = os.environ.get('SECRET_KEY', 'network-monitor-secret-key-change-me')
 
+# Host exclusion list (SPAN port, monitoring hosts, etc.)
+# These hosts are completely ignored - no traffic stats, no database entries
+EXCLUDED_IPS = {'10.0.0.151'}
+EXCLUDED_HOSTNAMES = {'crypto1', 'crypto1.local'}
+EXCLUDED_MACS = set()  # Add specific MACs if needed
+
+
+def is_excluded_host(ip: str = None, hostname: str = None, mac: str = None) -> bool:
+    """Check if a host should be excluded from monitoring"""
+    if ip and ip in EXCLUDED_IPS:
+        return True
+    if hostname:
+        hostname_lower = hostname.lower()
+        if hostname_lower in EXCLUDED_HOSTNAMES or any(h in hostname_lower for h in EXCLUDED_HOSTNAMES):
+            return True
+    if mac and mac.upper() in EXCLUDED_MACS:
+        return True
+    return False
+
 # Traffic categorization by port
 KNOWN_PORTS = {
     80: 'HTTP',
@@ -350,6 +369,11 @@ class DeviceDiscovery:
                 # Try to resolve hostname
                 hostname = self._resolve_hostname(ip)
                 
+                # Skip excluded hosts (SPAN port, etc.)
+                if is_excluded_host(ip=ip, hostname=hostname, mac=mac):
+                    logger.debug(f"Skipping excluded host: {ip} ({mac})")
+                    continue
+                
                 device = NetworkDevice(
                     mac=mac,
                     ip=ip,
@@ -551,12 +575,22 @@ class PacketSniffer:
                 src_ip = ip_layer.src
                 dst_ip = ip_layer.dst
                 
+                # Skip excluded hosts (SPAN port, etc.) - check early for performance
+                if is_excluded_host(ip=src_ip) or is_excluded_host(ip=dst_ip):
+                    return
+                
                 if packet.haslayer(TCP):
                     protocol = 'TCP'
                     tcp = packet[TCP]
                     src_port = tcp.sport
                     dst_port = tcp.dport
                     service = self._get_service(min(src_port, dst_port))
+                    # Process HTTP for User-Agent fingerprinting
+                    if (src_port == 80 or dst_port == 80) and FINGERPRINTING_AVAILABLE:
+                        try:
+                            fingerprinter.process_http(packet)
+                        except Exception as e:
+                            logger.debug(f"HTTP UA error: {e}")
                 elif packet.haslayer(UDP):
                     protocol = 'UDP'
                     udp = packet[UDP]
@@ -872,11 +906,30 @@ class ArpSpoofer:
 
     def _send_spoof(self, dst_ip, dst_mac, src_ip):
         """Send a single spoofed ARP response on the specific interface"""
+        # Validate we have the destination MAC
+        if not dst_mac:
+            # Try to resolve it
+            dst_mac = self._resolve_mac(dst_ip)
+            if not dst_mac:
+                logger.debug(f"Cannot spoof {dst_ip}: MAC unknown")
+                return
+        
         # op=2 is 'is-at' (ARP Reply)
         # We must set both Ether dst AND ARP hwdst to the target's MAC
         packet = Ether(dst=dst_mac) / ARP(op=2, pdst=dst_ip, hwdst=dst_mac, psrc=src_ip)
         from scapy.all import sendp
         sendp(packet, iface=self._interface, verbose=False)
+    
+    def _resolve_mac(self, ip: str) -> Optional[str]:
+        """Resolve MAC address for an IP using ARP"""
+        try:
+            packet = Ether(dst="ff:ff:ff:ff:ff:ff") / ARP(op=1, pdst=ip)
+            result = srp(packet, timeout=2, iface=self._interface, verbose=False)[0]
+            if result:
+                return result[0][1].hwsrc
+        except Exception as e:
+            logger.debug(f"MAC resolution failed for {ip}: {e}")
+        return None
 
 
 

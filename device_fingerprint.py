@@ -583,6 +583,372 @@ class NetBIOSResolver:
 
 
 # ==========================================
+# LLMNR LISTENER (Windows hostname resolution)
+# ==========================================
+
+class LLMNRListener:
+    """Listens for LLMNR (Link-Local Multicast Name Resolution) on UDP 5355.
+    Used primarily by Windows to resolve hostnames on the local network.
+    """
+    
+    LLMNR_ADDR = '224.0.0.252'
+    LLMNR_PORT = 5355
+    
+    def __init__(self, callback: Callable[[str, str], None] = None):
+        """
+        callback: function(ip, hostname) called when a hostname is discovered
+        """
+        self.callback = callback
+        self._running = False
+        self._thread = None
+        self._sock = None
+        self.names: Dict[str, str] = {}  # IP -> hostname
+    
+    def start(self):
+        """Start listening for LLMNR announcements"""
+        if self._running:
+            return
+        
+        self._running = True
+        self._thread = threading.Thread(target=self._listen_loop, daemon=True)
+        self._thread.start()
+        logger.info("LLMNR listener started")
+    
+    def stop(self):
+        """Stop the LLMNR listener"""
+        self._running = False
+        if self._sock:
+            try:
+                self._sock.close()
+            except:
+                pass
+        if self._thread:
+            self._thread.join(timeout=2)
+        logger.info("LLMNR listener stopped")
+    
+    def _listen_loop(self):
+        """Main listening loop"""
+        try:
+            self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            
+            try:
+                self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except AttributeError:
+                pass
+            
+            self._sock.bind(('', self.LLMNR_PORT))
+            
+            # Join multicast group
+            mreq = struct.pack('4sl', socket.inet_aton(self.LLMNR_ADDR), socket.INADDR_ANY)
+            self._sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+            
+            self._sock.settimeout(1.0)
+            
+            while self._running:
+                try:
+                    data, addr = self._sock.recvfrom(512)
+                    self._parse_llmnr(data, addr[0])
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    if self._running:
+                        logger.debug(f"LLMNR receive error: {e}")
+                        
+        except Exception as e:
+            logger.error(f"LLMNR listener error: {e}")
+        finally:
+            if self._sock:
+                try:
+                    self._sock.close()
+                except:
+                    pass
+    
+    def _parse_llmnr(self, data: bytes, source_ip: str):
+        """Parse LLMNR packet and extract hostname"""
+        try:
+            if len(data) < 12:
+                return
+            
+            # LLMNR header is like DNS
+            flags = struct.unpack('!H', data[2:4])[0]
+            is_response = (flags & 0x8000) != 0
+            
+            if not is_response:
+                return  # Only process responses
+            
+            # Parse the answer section for hostname
+            # Skip header (12 bytes) and question section
+            # Look for the name in the packet
+            offset = 12
+            name_parts = []
+            while offset < len(data) and data[offset] != 0:
+                length = data[offset]
+                if length > 63:  # Pointer, not supported in simple parse
+                    break
+                name_parts.append(data[offset+1:offset+1+length].decode('ascii', errors='ignore'))
+                offset += length + 1
+            
+            if name_parts:
+                hostname = '.'.join(name_parts)
+                if hostname and hostname != source_ip:
+                    self.names[source_ip] = hostname
+                    if self.callback:
+                        self.callback(source_ip, hostname)
+                    logger.debug(f"LLMNR: {source_ip} -> {hostname}")
+                    
+        except Exception as e:
+            logger.debug(f"LLMNR parse error: {e}")
+
+
+# ==========================================
+# WSD LISTENER (Web Services for Devices)
+# ==========================================
+
+class WSDListener:
+    """Listens for WSD (Web Services for Devices) on UDP 3702.
+    Used by Windows for printer discovery and device enumeration.
+    """
+    
+    WSD_ADDR = '239.255.255.250'
+    WSD_PORT = 3702
+    
+    def __init__(self, callback: Callable[[str, Dict], None] = None):
+        """
+        callback: function(ip, info_dict) called when a device is discovered
+        """
+        self.callback = callback
+        self._running = False
+        self._thread = None
+        self._sock = None
+        self.devices: Dict[str, Dict] = {}
+    
+    def start(self):
+        """Start listening for WSD announcements"""
+        if self._running:
+            return
+        
+        self._running = True
+        self._thread = threading.Thread(target=self._listen_loop, daemon=True)
+        self._thread.start()
+        logger.info("WSD listener started")
+    
+    def stop(self):
+        """Stop the WSD listener"""
+        self._running = False
+        if self._sock:
+            try:
+                self._sock.close()
+            except:
+                pass
+        if self._thread:
+            self._thread.join(timeout=2)
+        logger.info("WSD listener stopped")
+    
+    def _listen_loop(self):
+        """Main listening loop"""
+        try:
+            self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM, socket.IPPROTO_UDP)
+            self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            
+            try:
+                self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+            except AttributeError:
+                pass
+            
+            self._sock.bind(('', self.WSD_PORT))
+            
+            # Join multicast group
+            mreq = struct.pack('4sl', socket.inet_aton(self.WSD_ADDR), socket.INADDR_ANY)
+            self._sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
+            
+            self._sock.settimeout(1.0)
+            
+            while self._running:
+                try:
+                    data, addr = self._sock.recvfrom(8192)
+                    self._parse_wsd(data, addr[0])
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    if self._running:
+                        logger.debug(f"WSD receive error: {e}")
+                        
+        except Exception as e:
+            logger.error(f"WSD listener error: {e}")
+        finally:
+            if self._sock:
+                try:
+                    self._sock.close()
+                except:
+                    pass
+    
+    def _parse_wsd(self, data: bytes, source_ip: str):
+        """Parse WSD SOAP message for device info"""
+        try:
+            text = data.decode('utf-8', errors='ignore')
+            
+            info = {'device_type': None, 'model': None}
+            
+            # Look for device type hints in WSD message
+            if 'PrintDeviceType' in text or 'Printer' in text:
+                info['device_type'] = 'Printer'
+            elif 'Computer' in text:
+                info['device_type'] = 'Computer'
+            elif 'Scanner' in text:
+                info['device_type'] = 'Scanner'
+            
+            # Look for friendly name
+            name_match = re.search(r'<.*?FriendlyName>([^<]+)<', text)
+            if name_match:
+                info['friendly_name'] = name_match.group(1)
+            
+            # Look for model
+            model_match = re.search(r'<.*?ModelName>([^<]+)<', text)
+            if model_match:
+                info['model'] = model_match.group(1)
+            
+            if info.get('device_type') or info.get('friendly_name'):
+                self.devices[source_ip] = info
+                if self.callback:
+                    self.callback(source_ip, info)
+                logger.debug(f"WSD: {source_ip} -> {info}")
+                
+        except Exception as e:
+            logger.debug(f"WSD parse error: {e}")
+
+
+# ==========================================
+# HTTP USER-AGENT PARSER
+# ==========================================
+
+# Common User-Agent patterns for OS/device detection
+USER_AGENT_PATTERNS = {
+    # Windows
+    r'Windows NT 10\.0': 'Windows 10/11',
+    r'Windows NT 6\.3': 'Windows 8.1',
+    r'Windows NT 6\.2': 'Windows 8',
+    r'Windows NT 6\.1': 'Windows 7',
+    # macOS
+    r'Mac OS X (\d+[._]\d+)': 'macOS',
+    r'Macintosh': 'macOS',
+    # Linux
+    r'Linux': 'Linux',
+    r'Ubuntu': 'Ubuntu Linux',
+    r'Fedora': 'Fedora Linux',
+    # Mobile
+    r'iPhone': 'iPhone',
+    r'iPad': 'iPad',
+    r'Android (\d+)': 'Android',
+    # Smart TV / Streaming
+    r'SmartTV': 'Smart TV',
+    r'SMART-TV': 'Smart TV',
+    r'Roku': 'Roku',
+    r'Tizen': 'Samsung TV',
+    r'webOS': 'LG TV',
+    r'CrKey': 'Chromecast',
+}
+
+
+class HTTPUserAgentParser:
+    """Parses HTTP User-Agent strings to identify devices"""
+    
+    def __init__(self, callback: Callable[[str, str, Dict], None] = None):
+        """
+        callback: function(ip, user_agent, info_dict) called when UA is parsed
+        """
+        self.callback = callback
+        self.user_agents: Dict[str, List[str]] = {}  # IP -> list of UAs
+    
+    def process_http_packet(self, packet) -> Optional[Dict]:
+        """Process an HTTP packet to extract User-Agent.
+        Call this from your sniffer when TCP port 80 traffic is detected.
+        """
+        try:
+            from scapy.all import IP, TCP, Raw
+            
+            if not packet.haslayer(Raw):
+                return None
+            
+            payload = packet[Raw].load
+            if not payload:
+                return None
+            
+            # Check if it's an HTTP request
+            try:
+                text = payload.decode('utf-8', errors='ignore')
+            except:
+                return None
+            
+            if not text.startswith(('GET ', 'POST ', 'HEAD ', 'PUT ', 'DELETE ', 'PATCH ')):
+                return None
+            
+            # Extract User-Agent header
+            ua_match = re.search(r'User-Agent:\s*([^\r\n]+)', text, re.IGNORECASE)
+            if not ua_match:
+                return None
+            
+            user_agent = ua_match.group(1).strip()
+            src_ip = packet[IP].src
+            
+            # Parse the User-Agent
+            info = self.parse_user_agent(user_agent)
+            info['user_agent'] = user_agent
+            info['ip'] = src_ip
+            
+            # Store
+            if src_ip not in self.user_agents:
+                self.user_agents[src_ip] = []
+            if user_agent not in self.user_agents[src_ip]:
+                self.user_agents[src_ip].append(user_agent)
+                
+                if self.callback:
+                    self.callback(src_ip, user_agent, info)
+                
+                logger.debug(f"HTTP UA: {src_ip} -> {info.get('os_type', 'Unknown')}")
+            
+            return info
+            
+        except Exception as e:
+            logger.debug(f"HTTP UA parse error: {e}")
+            return None
+    
+    def parse_user_agent(self, ua: str) -> Dict:
+        """Parse a User-Agent string and return device info"""
+        info = {
+            'os_type': None,
+            'browser': None,
+            'device_type': None,
+        }
+        
+        # Check OS patterns
+        for pattern, os_name in USER_AGENT_PATTERNS.items():
+            if re.search(pattern, ua, re.IGNORECASE):
+                info['os_type'] = os_name
+                break
+        
+        # Check for mobile keywords
+        if re.search(r'Mobile|Android|iPhone|iPad', ua, re.IGNORECASE):
+            info['device_type'] = 'Mobile'
+        elif re.search(r'SmartTV|SMART-TV|Tizen|webOS|Roku|CrKey', ua, re.IGNORECASE):
+            info['device_type'] = 'Smart TV'
+        elif re.search(r'Bot|Crawler|Spider', ua, re.IGNORECASE):
+            info['device_type'] = 'Bot'
+        
+        # Common browsers
+        if 'Chrome/' in ua and 'Edg/' not in ua:
+            info['browser'] = 'Chrome'
+        elif 'Firefox/' in ua:
+            info['browser'] = 'Firefox'
+        elif 'Safari/' in ua and 'Chrome/' not in ua:
+            info['browser'] = 'Safari'
+        elif 'Edg/' in ua:
+            info['browser'] = 'Edge'
+        
+        return info
+
+
+# ==========================================
 # UNIFIED DEVICE FINGERPRINTER
 # ==========================================
 
@@ -605,6 +971,9 @@ class DeviceFingerprinter:
         self.ssdp = SSDPDiscovery(callback=self._on_ssdp)
         self.dhcp = DHCPFingerprinter(callback=self._on_dhcp)
         self.netbios = NetBIOSResolver(callback=self._on_netbios)
+        self.llmnr = LLMNRListener(callback=self._on_llmnr)
+        self.wsd = WSDListener(callback=self._on_wsd)
+        self.http_ua = HTTPUserAgentParser(callback=self._on_http_ua)
         
         self._running = False
     
@@ -616,9 +985,11 @@ class DeviceFingerprinter:
         self._running = True
         self.mdns.start()
         self.ssdp.start()
-        # DHCP and NetBIOS are called from packet processing, not background threads
+        self.llmnr.start()
+        self.wsd.start()
+        # DHCP, NetBIOS, and HTTP UA are called from packet processing, not background threads
         
-        logger.info("📡 Device fingerprinting background discovery services started (mDNS, SSDP)")
+        logger.info("📡 Device fingerprinting started (mDNS, SSDP, LLMNR, WSD)")
 
     
     def stop(self):
@@ -626,11 +997,17 @@ class DeviceFingerprinter:
         self._running = False
         self.mdns.stop()
         self.ssdp.stop()
+        self.llmnr.stop()
+        self.wsd.stop()
         logger.info("Device fingerprinting stopped")
     
     def process_dhcp(self, packet):
         """Process a DHCP packet from the sniffer"""
         return self.dhcp.process_dhcp_packet(packet)
+    
+    def process_http(self, packet):
+        """Process an HTTP packet from the sniffer"""
+        return self.http_ua.process_http_packet(packet)
 
     
     def resolve_netbios(self, ip: str) -> Optional[str]:
@@ -742,6 +1119,77 @@ class DeviceFingerprinter:
         if 'netbios' not in fp.discovery_methods:
             fp.discovery_methods.append('netbios')
             logger.info(f"🖥️ [NetBIOS] Resolved name for {mac} ({ip}) -> {name}")
+        fp.last_updated = datetime.now()
+        
+        self._notify(mac, fp)
+
+    
+    def _on_llmnr(self, ip: str, hostname: str):
+        """Handle LLMNR hostname discovery"""
+        mac = self.ip_to_mac.get(ip)
+        if not mac:
+            return
+        
+        if mac not in self.devices:
+            self.devices[mac] = DeviceFingerprint(mac=mac, ip=ip)
+        
+        fp = self.devices[mac]
+        if hostname:
+            fp.hostname = hostname
+        # LLMNR is primarily Windows
+        if not fp.os_type:
+            fp.os_type = 'Windows'
+        if 'llmnr' not in fp.discovery_methods:
+            fp.discovery_methods.append('llmnr')
+            logger.info(f"🔤 [LLMNR] Resolved {mac} ({ip}) -> {hostname}")
+        fp.last_updated = datetime.now()
+        
+        self._notify(mac, fp)
+
+    
+    def _on_wsd(self, ip: str, info: Dict):
+        """Handle WSD device discovery"""
+        mac = self.ip_to_mac.get(ip)
+        if not mac:
+            return
+        
+        if mac not in self.devices:
+            self.devices[mac] = DeviceFingerprint(mac=mac, ip=ip)
+        
+        fp = self.devices[mac]
+        if info.get('device_type'):
+            fp.device_type = info['device_type']
+        if info.get('model'):
+            fp.device_model = info['model']
+        if info.get('friendly_name') and not fp.hostname:
+            fp.hostname = info['friendly_name']
+        if 'wsd' not in fp.discovery_methods:
+            fp.discovery_methods.append('wsd')
+            logger.info(f"🖨️ [WSD] Discovered {mac} ({ip}) - Type: {fp.device_type or 'Unknown'}")
+        fp.last_updated = datetime.now()
+        
+        self._notify(mac, fp)
+
+    
+    def _on_http_ua(self, ip: str, user_agent: str, info: Dict):
+        """Handle HTTP User-Agent discovery"""
+        mac = self.ip_to_mac.get(ip)
+        if not mac:
+            return
+        
+        if mac not in self.devices:
+            self.devices[mac] = DeviceFingerprint(mac=mac, ip=ip)
+        
+        fp = self.devices[mac]
+        if user_agent not in fp.user_agents:
+            fp.user_agents.append(user_agent)
+        if info.get('os_type') and not fp.os_type:
+            fp.os_type = info['os_type']
+        if info.get('device_type') and not fp.device_type:
+            fp.device_type = info['device_type']
+        if 'http' not in fp.discovery_methods:
+            fp.discovery_methods.append('http')
+            logger.info(f"🌐 [HTTP UA] {mac} ({ip}) - OS: {info.get('os_type', 'Unknown')}, Browser: {info.get('browser', 'Unknown')}")
         fp.last_updated = datetime.now()
         
         self._notify(mac, fp)

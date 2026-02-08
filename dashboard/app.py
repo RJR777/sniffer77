@@ -1,31 +1,52 @@
 import os
 import sys
-
-# eventlet monkey patching removed to avoid conflicts with scapy raw sockets
-
+import asyncio
+import json
+import logging
+from typing import Set
+from contextlib import asynccontextmanager
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-
-from flask import Flask, render_template, jsonify, request
-from flask_socketio import SocketIO, emit
-import threading
-import time
-import logging
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+import uvicorn
 
 from network_monitor import DASHBOARD_HOST, DASHBOARD_PORT, SECRET_KEY, db, discovery, sniffer, arp_spoofer
 
 logger = logging.getLogger(__name__)
 
-app = Flask(__name__)
-app.config['SECRET_KEY'] = SECRET_KEY
+# WebSocket connection manager
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: Set[WebSocket] = set()
+    
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.add(websocket)
+        logger.info(f"🟢 Dashboard client connected from {websocket.client.host}")
+    
+    def disconnect(self, websocket: WebSocket):
+        self.active_connections.discard(websocket)
+        logger.info("🔴 Dashboard client disconnected")
+    
+    async def broadcast(self, message: dict):
+        """Send message to all connected clients"""
+        disconnected = set()
+        for connection in self.active_connections:
+            try:
+                await connection.send_json(message)
+            except Exception:
+                disconnected.add(connection)
+        # Clean up disconnected clients
+        self.active_connections -= disconnected
 
-# Use threading mode for better compatibility with scapy raw sockets
-# Force only websocket transport to avoid HTTP GET polling logs
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode='threading', transports=['websocket'])
+manager = ConnectionManager()
 
-
-
+# Background task flag
+_running_emitter = True
 
 
 def format_bytes(num_bytes: int) -> str:
@@ -37,28 +58,14 @@ def format_bytes(num_bytes: int) -> str:
     return f"{num_bytes:.1f} PB"
 
 
-@app.route('/')
-def index():
-    """Main dashboard page"""
-    logger.info(f"🌐 Dashboard requested from {request.remote_addr}")
-    return render_template('index.html')
-
-
-
-@app.route('/api/summary')
-def api_summary():
-    """Get dashboard summary"""
-    logger.debug(f"📊 Summary requested from {request.remote_addr}")
-    summary = db.get_dashboard_summary()
-    summary['bytes_sent_formatted'] = format_bytes(summary['bytes_sent_hour'])
-    summary['bytes_received_formatted'] = format_bytes(summary['bytes_received_hour'])
-    return jsonify(summary)
-
-
 def _get_processed_devices(active_only=True):
     """Helper to get and process device list for dashboard"""
-    import json
+    from network_monitor import is_excluded_host
+    
     devices = db.get_all_devices(active_only=active_only)
+    # Filter out excluded hosts (crypto1, etc.) - they shouldn't appear in dashboard
+    devices = [d for d in devices if not is_excluded_host(ip=d.get('ip'), hostname=d.get('hostname'), mac=d.get('mac'))]
+    
     for d in devices:
         d['bytes_display'] = format_bytes(0)
         if d.get('metadata'):
@@ -75,71 +82,152 @@ def _get_processed_devices(active_only=True):
     return devices
 
 
-@app.route('/api/devices')
-def api_devices():
+def get_stats_payload():
+    """Build the stats payload for WebSocket broadcast"""
+    summary = db.get_dashboard_summary()
+    summary['bytes_sent_formatted'] = format_bytes(summary['bytes_sent_hour'])
+    summary['bytes_received_formatted'] = format_bytes(summary['bytes_received_hour'])
+    
+    talkers = db.get_top_talkers(hours=1, limit=10)
+    for t in talkers:
+        t['total_formatted'] = format_bytes(t['total_bytes'])
+        t['sent_formatted'] = format_bytes(t['bytes_sent'])
+        t['received_formatted'] = format_bytes(t['bytes_received'])
+    
+    live_stats = sniffer.get_live_stats()
+    for mac, s in live_stats.items():
+        s['total_bytes'] = s['bytes_sent'] + s['bytes_received']
+        s['total_formatted'] = format_bytes(s['total_bytes'])
+    
+    devices = _get_processed_devices(active_only=True)
+    
+    return {
+        'type': 'stats_update',
+        'summary': summary,
+        'top_talkers': talkers,
+        'live_stats': live_stats,
+        'devices': devices
+    }
+
+
+async def background_emitter():
+    """Background task to emit periodic updates via WebSocket"""
+    global _running_emitter
+    while _running_emitter:
+        await asyncio.sleep(5)
+        if manager.active_connections:
+            try:
+                payload = get_stats_payload()
+                await manager.broadcast(payload)
+            except Exception as e:
+                if _running_emitter:
+                    logger.error(f"Background emitter error: {e}")
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manage startup and shutdown events"""
+    global _running_emitter
+    _running_emitter = True
+    # Start background emitter
+    emitter_task = asyncio.create_task(background_emitter())
+    logger.info("📡 Background stats emitter started")
+    yield
+    # Shutdown
+    _running_emitter = False
+    emitter_task.cancel()
+    try:
+        await emitter_task
+    except asyncio.CancelledError:
+        pass
+    logger.info("📡 Background stats emitter stopped")
+
+
+# Create FastAPI app
+app = FastAPI(title="Network Monitor", lifespan=lifespan)
+
+# Mount static files and templates
+templates_dir = os.path.join(os.path.dirname(__file__), 'templates')
+static_dir = os.path.join(os.path.dirname(__file__), 'static')
+app.mount("/static", StaticFiles(directory=static_dir), name="static")
+templates = Jinja2Templates(directory=templates_dir)
+
+
+# Routes
+@app.get("/", response_class=HTMLResponse)
+async def index(request: Request):
+    """Main dashboard page"""
+    logger.info(f"🌐 Dashboard requested from {request.client.host}")
+    return templates.TemplateResponse("index.html", {"request": request})
+
+
+@app.get("/api/summary")
+async def api_summary():
+    """Get dashboard summary"""
+    summary = db.get_dashboard_summary()
+    summary['bytes_sent_formatted'] = format_bytes(summary['bytes_sent_hour'])
+    summary['bytes_received_formatted'] = format_bytes(summary['bytes_received_hour'])
+    return JSONResponse(summary)
+
+
+@app.get("/api/devices")
+async def api_devices():
     """Get all active devices"""
-    return jsonify(_get_processed_devices(active_only=True))
+    return JSONResponse(_get_processed_devices(active_only=True))
 
 
-
-@app.route('/api/devices/all')
-def api_all_devices():
+@app.get("/api/devices/all")
+async def api_all_devices():
     """Get all devices including inactive"""
     devices = db.get_all_devices(active_only=False)
-    return jsonify(devices)
+    return JSONResponse(devices)
 
 
-@app.route('/api/top-talkers')
-def api_top_talkers():
+@app.get("/api/top-talkers")
+async def api_top_talkers(hours: int = 1, limit: int = 10):
     """Get top bandwidth consumers"""
-    hours = request.args.get('hours', 1, type=int)
-    limit = request.args.get('limit', 10, type=int)
     talkers = db.get_top_talkers(hours=hours, limit=limit)
     for t in talkers:
         t['total_formatted'] = format_bytes(t['total_bytes'])
         t['sent_formatted'] = format_bytes(t['bytes_sent'])
         t['received_formatted'] = format_bytes(t['bytes_received'])
-    return jsonify(talkers)
+    return JSONResponse(talkers)
 
 
-@app.route('/api/connections')
-def api_connections():
+@app.get("/api/connections")
+async def api_connections(mac: str = None, limit: int = 100):
     """Get recent connections"""
-    mac = request.args.get('mac')
-    limit = request.args.get('limit', 100, type=int)
     connections = db.get_recent_connections(mac=mac, limit=limit)
-    return jsonify(connections)
+    return JSONResponse(connections)
 
 
-@app.route('/api/live-stats')
-def api_live_stats():
+@app.get("/api/live-stats")
+async def api_live_stats():
     """Get live traffic stats from sniffer"""
     stats = sniffer.get_live_stats()
     for mac, s in stats.items():
         s['total_bytes'] = s['bytes_sent'] + s['bytes_received']
         s['total_formatted'] = format_bytes(s['total_bytes'])
-    return jsonify(stats)
+    return JSONResponse(stats)
 
 
-@app.route('/api/device/<mac>/name', methods=['POST'])
-def set_device_name(mac):
+@app.post("/api/device/{mac}/name")
+async def set_device_name(mac: str, request: Request):
     """Set custom name for a device"""
-    data = request.get_json()
+    data = await request.json()
     name = data.get('name', '')
-    # Would need to add this method to db
-    return jsonify({'success': True, 'mac': mac, 'name': name})
+    return JSONResponse({'success': True, 'mac': mac, 'name': name})
 
 
-@app.route('/api/shutdown', methods=['POST'])
-def api_shutdown():
+@app.post("/api/shutdown")
+async def api_shutdown():
     """Shutdown the entire application"""
+    global _running_emitter
     logger.info("🛑 Shutdown requested via dashboard")
     
-    # 1. Stop background threads in this module
-    global _running_emitter
     _running_emitter = False
     
-    # 2. Stop core monitor components
+    # Stop core monitor components
     try:
         sniffer.stop()
     except Exception as e:
@@ -151,7 +239,6 @@ def api_shutdown():
         logger.error(f"Error stopping discovery: {e}")
         
     try:
-        # Stop fingerprinter if available
         import network_monitor
         if getattr(network_monitor, 'FINGERPRINTING_AVAILABLE', False):
             from device_fingerprint import fingerprinter
@@ -159,26 +246,24 @@ def api_shutdown():
     except Exception as e:
         logger.error(f"Error stopping fingerprinter: {e}")
     
-    # 3. Shutdown Flask/SocketIO
-    # We use a separate thread to exit so we can return the success response first
-    def delayed_exit():
-        time.sleep(1)
+    # Schedule delayed exit
+    async def delayed_exit():
+        await asyncio.sleep(1)
         logger.info("System process exiting.")
         os._exit(0)
     
-    threading.Thread(target=delayed_exit, daemon=True).start()
+    asyncio.create_task(delayed_exit())
     
-    return jsonify({'success': True, 'message': 'System is shutting down...'})
+    return JSONResponse({'success': True, 'message': 'System is shutting down...'})
 
 
-@app.route('/api/device/<mac>/monitor', methods=['POST'])
-def toggle_monitoring(mac):
+@app.post("/api/device/{mac}/monitor")
+async def toggle_monitoring(mac: str, request: Request):
     """Toggle active monitoring (MITM) for a device"""
-    data = request.get_json()
-    action = data.get('action') # 'start' or 'stop'
+    data = await request.json()
+    action = data.get('action')
     
     # Get IP for this MAC
-    # First check discovery RAM cache
     device = discovery.devices.get(mac)
     device_ip = device.ip if device else None
     
@@ -189,106 +274,75 @@ def toggle_monitoring(mac):
             device_ip = db_device.get('ip')
             
     if not device_ip:
-        logger.warning(f"❌ Cannot start monitoring for {mac}: IP not found in cache or DB")
-        return jsonify({'success': False, 'error': 'Device IP not found'})
-
+        logger.warning(f"❌ Cannot start monitoring for {mac}: IP not found")
+        return JSONResponse({'success': False, 'error': 'Device IP not found'})
         
     if action == 'start':
         try:
-            # properly initialize if not running
+            # Run blocking ARP operations in thread pool to avoid blocking event loop
             if not arp_spoofer._running:
-                arp_spoofer.start()
-            
-            arp_spoofer.add_target(device_ip, mac)
-            return jsonify({'success': True, 'status': 'monitoring', 'ip': device_ip})
-
+                await asyncio.to_thread(arp_spoofer.start)
+            await asyncio.to_thread(arp_spoofer.add_target, device_ip, mac)
+            return JSONResponse({'success': True, 'status': 'monitoring', 'ip': device_ip})
         except Exception as e:
-            return jsonify({'success': False, 'error': str(e)})
+            logger.error(f"Monitoring error: {e}")
+            return JSONResponse({'success': False, 'error': str(e)})
             
     elif action == 'stop':
-        arp_spoofer.remove_target(device.ip)
-        return jsonify({'success': True, 'status': 'stopped'})
+        await asyncio.to_thread(arp_spoofer.remove_target, device_ip)
+        return JSONResponse({'success': True, 'status': 'stopped'})
         
-    return jsonify({'success': False, 'error': 'Invalid action'})
+    return JSONResponse({'success': False, 'error': 'Invalid action'})
 
 
-@socketio.on('connect')
-def handle_connect():
-    """Handle client connection"""
-    logger.info(f"🟢 Dashboard client connected from {request.remote_addr}")
-    emit('connected', {'status': 'ok'})
-
-
-@socketio.on('disconnect')
-def handle_disconnect():
-    """Handle client disconnection"""
-    logger.info("🔴 Dashboard client disconnected")
-
-
-
-@socketio.on('request_update')
-def handle_update_request():
-    """Send current stats to client"""
-    summary = db.get_dashboard_summary()
-    talkers = db.get_top_talkers(hours=1, limit=10)
-    live_stats = sniffer.get_live_stats()
-    devices = _get_processed_devices(active_only=True)
-    emit('stats_update', {
-        'summary': summary, 
-        'top_talkers': talkers, 
-        'live_stats': live_stats,
-        'devices': devices
-    })
-
-
-
-
-_running_emitter = True
-
-def background_emitter():
-    """Background thread to emit periodic updates"""
-    with app.app_context():
-        while _running_emitter:
-            time.sleep(5)
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time updates"""
+    await manager.connect(websocket)
+    
+    # Send initial stats immediately
+    try:
+        payload = get_stats_payload()
+        payload['type'] = 'connected'
+        await websocket.send_json(payload)
+    except Exception as e:
+        logger.error(f"Error sending initial stats: {e}")
+    
+    try:
+        while True:
+            # Wait for any message from client (keepalive or request)
+            data = await websocket.receive_text()
             try:
-                summary = db.get_dashboard_summary()
-                talkers = db.get_top_talkers(hours=1, limit=10)
-                live_stats = sniffer.get_live_stats()
-                devices = _get_processed_devices(active_only=True)
-                socketio.emit('stats_update', {
-                    'summary': summary, 
-                    'top_talkers': talkers, 
-                    'live_stats': live_stats,
-                    'devices': devices
-                })
-            except Exception as e:
-                if _running_emitter:
-                    logger.error(f"Background emitter error: {e}")
-                    import traceback
-                    logger.error(traceback.format_exc())
-
-
+                msg = json.loads(data)
+                if msg.get('type') == 'request_update':
+                    payload = get_stats_payload()
+                    await websocket.send_json(payload)
+            except json.JSONDecodeError:
+                pass
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+    except Exception as e:
+        logger.error(f"WebSocket error: {e}")
+        manager.disconnect(websocket)
 
 
 def start_dashboard(host: str = DASHBOARD_HOST, port: int = DASHBOARD_PORT, debug: bool = False):
     """Start the dashboard server"""
     logger.info(f"🚀 Initializing dashboard server on {host}:{port}...")
-    
-    # Start background update thread
-    update_thread = threading.Thread(target=background_emitter, daemon=True)
-    update_thread.start()
-    logger.info("📡 Background stats emitter thread started")
+    logger.info(f"🌐 Dashboard is LIVE at http://{host}:{port}")
     
     try:
-        logger.info(f"🌐 Dashboard is LIVE at http://{host}:{port}")
-        # When using eventlet, we should avoid allow_unsafe_werkzeug=True if possible
-        # and we set debug=False to avoid issues with sudo/threads
-        socketio.run(app, host=host, port=port, debug=False, log_output=True)
+        uvicorn.run(
+            app,
+            host=host,
+            port=port,
+            log_level="warning" if not debug else "info",
+            access_log=False
+        )
     except Exception as e:
         logger.error(f"❌ Failed to start dashboard: {e}")
         import traceback
         logger.error(traceback.format_exc())
-
 
 
 if __name__ == '__main__':
