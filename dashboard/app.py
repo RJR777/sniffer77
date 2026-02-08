@@ -181,10 +181,20 @@ def toggle_monitoring(mac):
     action = data.get('action') # 'start' or 'stop'
     
     # Get IP for this MAC
-    # For now, just searching our discovered devices
+    # First check discovery RAM cache
     device = discovery.devices.get(mac)
-    if not device or not device.ip:
+    device_ip = device.ip if device else None
+    
+    # Fallback to database if not in RAM
+    if not device_ip:
+        db_device = db.get_device(mac)
+        if db_device:
+            device_ip = db_device.get('ip')
+            
+    if not device_ip:
+        logger.warning(f"❌ Cannot start monitoring for {mac}: IP not found in cache or DB")
         return jsonify({'success': False, 'error': 'Device IP not found'})
+
         
     if action == 'start':
         try:
@@ -192,8 +202,9 @@ def toggle_monitoring(mac):
             if not arp_spoofer._running:
                 arp_spoofer.start()
             
-            arp_spoofer.add_target(device.ip, mac)
-            return jsonify({'success': True, 'status': 'monitoring', 'ip': device.ip})
+            arp_spoofer.add_target(device_ip, mac)
+            return jsonify({'success': True, 'status': 'monitoring', 'ip': device_ip})
+
         except Exception as e:
             return jsonify({'success': False, 'error': str(e)})
             

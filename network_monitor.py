@@ -204,6 +204,14 @@ class DataStore:
             else:
                 cursor.execute('SELECT * FROM devices ORDER BY last_seen DESC')
             return [dict(row) for row in cursor.fetchall()]
+
+    def get_device(self, mac: str) -> Optional[Dict]:
+        """Fetch a single device by MAC from database"""
+        with self._cursor() as cursor:
+            cursor.execute('SELECT * FROM devices WHERE mac = ?', (mac,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
     
     def record_traffic(self, mac: str, bytes_sent: int = 0, bytes_received: int = 0,
                        packets_sent: int = 0, packets_received: int = 0):
@@ -627,8 +635,31 @@ class PacketSniffer:
         except Exception as e:
             logger.error(f"Sniffing error on {interface}: {e}")
     
+    def _is_interface_up(self, interface: str) -> bool:
+        """Check if a network interface is actually usable and UP"""
+        try:
+            # Check operstate
+            state_path = f"/sys/class/net/{interface}/operstate"
+            if os.path.exists(state_path):
+                with open(state_path, 'r') as f:
+                    state = f.read().strip()
+                    if state == 'down':
+                        return False
+            
+            # Check flags (IFF_UP is bit 0)
+            flags_path = f"/sys/class/net/{interface}/flags"
+            if os.path.exists(flags_path):
+                with open(flags_path, 'r') as f:
+                    flags = int(f.read().strip(), 16)
+                    if not (flags & 0x1): # IFF_UP
+                        return False
+            
+            return True
+        except Exception:
+            return False
+
     def start(self):
-        """Start packet capture on all interfaces"""
+        """Start packet capture on all usable interfaces"""
         if not SCAPY_AVAILABLE:
             logger.error("Cannot start sniffer - scapy not available")
             return
@@ -639,12 +670,39 @@ class PacketSniffer:
         self._running = True
         conf.verb = 0
         
+        active_found = []
         for interface in self.interfaces:
+            # Only start sniffing if interface exists and is UP
+            if not os.path.exists(f"/sys/class/net/{interface}"):
+                logger.debug(f"Interface {interface} does not exist, skipping.")
+                continue
+                
+            if not self._is_interface_up(interface):
+                logger.info(f"Interface {interface} is DOWN or RF-KILLED, skipping.")
+                continue
+
+            active_found.append(interface)
             thread = threading.Thread(target=self._sniff_interface, args=(interface,), daemon=True)
             thread.start()
             self._sniff_threads.append(thread)
         
-        logger.info(f"Packet sniffer started on: {', '.join(self.interfaces)}")
+        if active_found:
+            logger.info(f"Packet sniffer started on: {', '.join(active_found)}")
+            # Register the host machine itself so it shows on the dashboard
+            for mac in self._local_macs:
+                ip = next(iter(self._local_ips)) if self._local_ips else '127.0.0.1'
+                discovery.process_packet_device(mac, ip)
+                if FINGERPRINTING_AVAILABLE:
+                    fingerprinter.register_ip_mac(ip, mac)
+                    # Label as local host
+                    if mac in fingerprinter.devices:
+                        fingerprinter.devices[mac].device_type = "Host Machine"
+                        fingerprinter.devices[mac].hostname = socket.gethostname()
+                        fingerprinter.devices[mac].discovery_methods.append('local')
+        else:
+            logger.warning("No active network interfaces found to sniff!")
+
+
     
     def stop(self):
         """Stop packet capture"""

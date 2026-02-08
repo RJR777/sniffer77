@@ -8,6 +8,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 *.so
+.oui_cache.txt
 
 # Distribution / packaging
 dist/

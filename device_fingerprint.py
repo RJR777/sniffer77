@@ -672,9 +672,11 @@ class DeviceFingerprinter:
             fp.services = list(set(fp.services + info['services']))
         if 'mdns' not in fp.discovery_methods:
             fp.discovery_methods.append('mdns')
+            logger.info(f"🔍 [mDNS] Discovered {mac} ({ip}) - Model: {fp.device_model or 'Unknown'}, Type: {fp.device_type or 'Unknown'}")
         fp.last_updated = datetime.now()
         
         self._notify(mac, fp)
+
     
     def _on_ssdp(self, ip: str, info: Dict):
         """Handle SSDP discovery"""
@@ -694,9 +696,11 @@ class DeviceFingerprinter:
             fp.raw_data['ssdp_server'] = info['server']
         if 'ssdp' not in fp.discovery_methods:
             fp.discovery_methods.append('ssdp')
+            logger.info(f"🛰️ [SSDP] Discovered {mac} ({ip}) - Type: {fp.device_type or 'Unknown'}, OS: {fp.os_type or 'Unknown'}")
         fp.last_updated = datetime.now()
         
         self._notify(mac, fp)
+
     
     def _on_dhcp(self, mac: str, ip: str, info: Dict):
         """Handle DHCP fingerprint"""
@@ -718,9 +722,11 @@ class DeviceFingerprinter:
             fp.dhcp_lease_time = info['lease_time']
         if 'dhcp' not in fp.discovery_methods:
             fp.discovery_methods.append('dhcp')
+            logger.info(f"💾 [DHCP] Fingerprinted {mac} ({ip}) - OS Guess: {fp.os_type or 'Unknown'}")
         fp.last_updated = datetime.now()
         
         self._notify(mac, fp)
+
     
     def _on_netbios(self, ip: str, name: str):
         """Handle NetBIOS name resolution"""
@@ -735,9 +741,11 @@ class DeviceFingerprinter:
         fp.hostname = name
         if 'netbios' not in fp.discovery_methods:
             fp.discovery_methods.append('netbios')
+            logger.info(f"🖥️ [NetBIOS] Resolved name for {mac} ({ip}) -> {name}")
         fp.last_updated = datetime.now()
         
         self._notify(mac, fp)
+
     
     def _notify(self, mac: str, fingerprint: DeviceFingerprint):
         """Notify callback of device update"""
