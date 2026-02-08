@@ -58,14 +58,12 @@ def api_summary():
     return jsonify(summary)
 
 
-@app.route('/api/devices')
-def api_devices():
-    """Get all active devices"""
+def _get_processed_devices(active_only=True):
+    """Helper to get and process device list for dashboard"""
     import json
-    devices = db.get_all_devices(active_only=True)
+    devices = db.get_all_devices(active_only=active_only)
     for d in devices:
-        d['bytes_display'] = format_bytes(0)  # Will be updated via live stats
-        # Parse metadata for fingerprint info
+        d['bytes_display'] = format_bytes(0)
         if d.get('metadata'):
             try:
                 meta = json.loads(d['metadata']) if isinstance(d['metadata'], str) else d['metadata']
@@ -73,12 +71,18 @@ def api_devices():
                 d['discovery_methods'] = meta.get('discovery_methods', [])
                 d['dhcp_lease_time'] = meta.get('dhcp_lease_time')
                 if d['dhcp_lease_time']:
-                    # Format lease time as human readable
                     hours = d['dhcp_lease_time'] // 3600
                     d['dhcp_lease_display'] = f"{hours}h" if hours else f"{d['dhcp_lease_time'] // 60}m"
             except:
                 pass
-    return jsonify(devices)
+    return devices
+
+
+@app.route('/api/devices')
+def api_devices():
+    """Get all active devices"""
+    return jsonify(_get_processed_devices(active_only=True))
+
 
 
 @app.route('/api/devices/all')
@@ -220,7 +224,7 @@ def handle_update_request():
     summary = db.get_dashboard_summary()
     talkers = db.get_top_talkers(hours=1, limit=10)
     live_stats = sniffer.get_live_stats()
-    devices = api_devices().get_json() # Reuse logic from the API endpoint
+    devices = _get_processed_devices(active_only=True)
     emit('stats_update', {
         'summary': summary, 
         'top_talkers': talkers, 
@@ -230,26 +234,31 @@ def handle_update_request():
 
 
 
+
 _running_emitter = True
 
 def background_emitter():
     """Background thread to emit periodic updates"""
-    while _running_emitter:
-        time.sleep(5)
-        try:
-            summary = db.get_dashboard_summary()
-            talkers = db.get_top_talkers(hours=1, limit=10)
-            live_stats = sniffer.get_live_stats()
-            devices = api_devices().get_json()
-            socketio.emit('stats_update', {
-                'summary': summary, 
-                'top_talkers': talkers, 
-                'live_stats': live_stats,
-                'devices': devices
-            })
-        except Exception as e:
-            if _running_emitter:
-                logger.error(f"Background emitter error: {e}")
+    with app.app_context():
+        while _running_emitter:
+            time.sleep(5)
+            try:
+                summary = db.get_dashboard_summary()
+                talkers = db.get_top_talkers(hours=1, limit=10)
+                live_stats = sniffer.get_live_stats()
+                devices = _get_processed_devices(active_only=True)
+                socketio.emit('stats_update', {
+                    'summary': summary, 
+                    'top_talkers': talkers, 
+                    'live_stats': live_stats,
+                    'devices': devices
+                })
+            except Exception as e:
+                if _running_emitter:
+                    logger.error(f"Background emitter error: {e}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+
 
 
 

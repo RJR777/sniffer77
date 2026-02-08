@@ -5,6 +5,7 @@ Identifies device manufacturers without requiring any agent on the device
 import os
 import re
 import logging
+import threading
 from typing import Optional, Dict
 from functools import lru_cache
 
