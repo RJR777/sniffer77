@@ -9,6 +9,7 @@ __pycache__/
 *$py.class
 *.so
 .oui_cache.txt
+oui_cache.txt
 
 # Distribution / packaging
 dist/
@@ -18,6 +19,10 @@ build/
 # Logs
 *.log
 network_monitor.log
+startup.log
+
+# Config (unused)
+pyrefly.toml
 
 # Database
 network_data.db
